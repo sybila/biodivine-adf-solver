@@ -1,4 +1,4 @@
-use crate::{ConditionExpression, AdfExpressions, Statement};
+use crate::{AdfExpressions, ConditionExpression, Statement};
 use cancel_this::{Cancellable, is_cancelled};
 use ruddy::VariableId;
 use ruddy::split::Bdd;
