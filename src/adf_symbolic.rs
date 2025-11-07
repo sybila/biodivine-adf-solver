@@ -228,24 +228,19 @@ impl SymbolicAdf {
 
         // Build direct encoding conditions
         let mut direct_conditions = BTreeMap::new();
-        for statement in &statements {
+        for (statement, condition) in adf.conditions() {
             is_cancelled!()?;
-            if let Some(expr) = adf.get_condition(statement) {
-                let bdd = expression_to_bdd(expr, &direct_map)?;
-                direct_conditions.insert(*statement, bdd);
-            }
+            let bdd = expression_to_bdd(condition, &direct_map)?;
+            direct_conditions.insert(*statement, bdd);
         }
 
         // Build dual encoding conditions from direct encoding
         let mut dual_conditions = BTreeMap::new();
-        for statement in &statements {
+        for (statement, condition) in direct_conditions.iter() {
             is_cancelled!()?;
-            if let Some(direct_bdd) = direct_conditions.get(statement) {
-                let can_be_true = direct_to_dual_encoding(direct_bdd, &direct_map, &dual_map)?;
-                let can_be_false =
-                    direct_to_dual_encoding(&direct_bdd.not(), &direct_map, &dual_map)?;
-                dual_conditions.insert(*statement, (can_be_true, can_be_false));
-            }
+            let can_be_true = direct_to_dual_encoding(condition, &direct_map, &dual_map)?;
+            let can_be_false = direct_to_dual_encoding(&condition.not(), &direct_map, &dual_map)?;
+            dual_conditions.insert(*statement, (can_be_true, can_be_false));
         }
 
         Ok(SymbolicAdf {
@@ -363,17 +358,17 @@ fn direct_to_dual_encoding(
         // Check for cancellation at each iteration
         is_cancelled!()?;
 
-        let state_var = direct_map[statement];
+        let direct_var = direct_map[statement];
         let (t_lit, f_lit) = dual_map.get_literals(*statement);
 
-        // Create the constraint: (state_var => t_var) & (!state_var => f_var)
-        // This is equivalent to: (!state_var | t_var) & (state_var | f_var)
-        let state_implies_t = direct_map.get_literal(*statement, false).or(&t_lit);
-        let not_state_implies_f = direct_map.get_literal(*statement, true).or(&f_lit);
-        let is_in_space = state_implies_t.and(&not_state_implies_f);
+        // (direct_var => t_var) & (!direct_var => f_var)
+        // This is equivalent to: (!direct_var | t_var) & (direct_var | f_var)
+        let direct_implies_t = direct_map.get_literal(*statement, false).or(&t_lit);
+        let not_direct_implies_f = direct_map.get_literal(*statement, true).or(&f_lit);
+        let mapping_function = direct_implies_t.and(&not_direct_implies_f);
 
         // Apply constraint and existentially quantify the state variable
-        result = result.and(&is_in_space).exists(&[state_var]);
+        result = result.and(&mapping_function).exists(&[direct_var]);
     }
 
     Ok(result)
