@@ -373,3 +373,302 @@ fn direct_to_dual_encoding(
 
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_direct_map_creation() {
+        let statements = vec![Statement::from(0), Statement::from(5), Statement::from(10)];
+        let map = DirectMap::new(&statements);
+
+        // Check that all statements are present
+        assert_eq!(map.statements().len(), 3);
+        assert!(map.statements().contains(&Statement::from(0)));
+        assert!(map.statements().contains(&Statement::from(5)));
+        assert!(map.statements().contains(&Statement::from(10)));
+    }
+
+    #[test]
+    fn test_direct_map_get() {
+        let statements = vec![Statement::from(0), Statement::from(5)];
+        let map = DirectMap::new(&statements);
+
+        // Check that we can retrieve variable IDs
+        assert!(map.get(Statement::from(0)).is_some());
+        assert!(map.get(Statement::from(5)).is_some());
+        assert!(map.get(Statement::from(99)).is_none());
+
+        // Variable IDs should be based on statement indices (shifted by 2)
+        let var0 = map.get(Statement::from(0)).unwrap();
+        let var5 = map.get(Statement::from(5)).unwrap();
+        assert_eq!(u64::from(var0), 0 << 2);
+        assert_eq!(u64::from(var5), 5 << 2);
+    }
+
+    #[test]
+    fn test_direct_map_indexing() {
+        let statements = vec![Statement::from(0), Statement::from(5)];
+        let map = DirectMap::new(&statements);
+
+        // Check indexing with reference
+        let var0_ref = map[&Statement::from(0)];
+        let var0_get = map.get(Statement::from(0)).unwrap();
+        assert_eq!(var0_ref, var0_get);
+
+        // Check indexing with value
+        let var5_val = map[Statement::from(5)];
+        let var5_get = map.get(Statement::from(5)).unwrap();
+        assert_eq!(var5_val, var5_get);
+    }
+
+    #[test]
+    #[should_panic(expected = "Statement not found in DirectMap")]
+    fn test_direct_map_indexing_panic() {
+        let statements = vec![Statement::from(0)];
+        let map = DirectMap::new(&statements);
+        let _ = map[Statement::from(99)];
+    }
+
+    #[test]
+    fn test_direct_map_get_literal() {
+        let statements = vec![Statement::from(0)];
+        let map = DirectMap::new(&statements);
+
+        let positive = map.get_literal(Statement::from(0), true);
+        let negative = map.get_literal(Statement::from(0), false);
+
+        // Both should be valid BDDs (not true or false constants)
+        assert!(!positive.is_true());
+        assert!(!positive.is_false());
+        assert!(!negative.is_true());
+        assert!(!negative.is_false());
+
+        // They should be different
+        assert!(!positive.structural_eq(&negative));
+    }
+
+    #[test]
+    fn test_dual_map_creation() {
+        let statements = vec![Statement::from(0), Statement::from(5), Statement::from(10)];
+        let map = DualMap::new(&statements);
+
+        // Check that all statements are present
+        assert_eq!(map.statements().len(), 3);
+        assert!(map.statements().contains(&Statement::from(0)));
+        assert!(map.statements().contains(&Statement::from(5)));
+        assert!(map.statements().contains(&Statement::from(10)));
+    }
+
+    #[test]
+    fn test_dual_map_get() {
+        let statements = vec![Statement::from(0), Statement::from(5)];
+        let map = DualMap::new(&statements);
+
+        // Check that we can retrieve variable ID pairs
+        assert!(map.get(Statement::from(0)).is_some());
+        assert!(map.get(Statement::from(5)).is_some());
+        assert!(map.get(Statement::from(99)).is_none());
+
+        // Variable IDs should be consecutive: (index << 2) + 1 and (index << 2) + 2
+        let (t0, f0) = map.get(Statement::from(0)).unwrap();
+        let (t5, f5) = map.get(Statement::from(5)).unwrap();
+
+        assert_eq!(u64::from(t0), (0 << 2) + 1);
+        assert_eq!(u64::from(f0), (0 << 2) + 2);
+        assert_eq!(u64::from(t5), (5 << 2) + 1);
+        assert_eq!(u64::from(f5), (5 << 2) + 2);
+    }
+
+    #[test]
+    fn test_dual_map_indexing() {
+        let statements = vec![Statement::from(0), Statement::from(5)];
+        let map = DualMap::new(&statements);
+
+        // Check indexing with reference
+        let (t0_ref, f0_ref) = map[&Statement::from(0)];
+        let (t0_get, f0_get) = map.get(Statement::from(0)).unwrap();
+        assert_eq!(t0_ref, t0_get);
+        assert_eq!(f0_ref, f0_get);
+
+        // Check indexing with value
+        let (t5_val, f5_val) = map[Statement::from(5)];
+        let (t5_get, f5_get) = map.get(Statement::from(5)).unwrap();
+        assert_eq!(t5_val, t5_get);
+        assert_eq!(f5_val, f5_get);
+    }
+
+    #[test]
+    #[should_panic(expected = "Statement not found in DualMap")]
+    fn test_dual_map_indexing_panic() {
+        let statements = vec![Statement::from(0)];
+        let map = DualMap::new(&statements);
+        let _ = map[Statement::from(99)];
+    }
+
+    #[test]
+    fn test_dual_map_get_literals() {
+        let statements = vec![Statement::from(0)];
+        let map = DualMap::new(&statements);
+
+        let (t_lit, f_lit) = map.get_literals(Statement::from(0));
+
+        // Both should be valid BDDs (not true or false constants)
+        assert!(!t_lit.is_true());
+        assert!(!t_lit.is_false());
+        assert!(!f_lit.is_true());
+        assert!(!f_lit.is_false());
+
+        // They should be different
+        assert!(!t_lit.structural_eq(&f_lit));
+    }
+
+    #[test]
+    fn test_dual_map_individual_literals() {
+        let statements = vec![Statement::from(0)];
+        let map = DualMap::new(&statements);
+
+        let t_lit = map.get_positive_literal(Statement::from(0));
+        let f_lit = map.get_negative_literal(Statement::from(0));
+        let (t_both, f_both) = map.get_literals(Statement::from(0));
+
+        // Individual methods should match get_literals
+        assert!(t_lit.structural_eq(&t_both));
+        assert!(f_lit.structural_eq(&f_both));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_constants() {
+        let statements = vec![Statement::from(0)];
+        let map = DirectMap::new(&statements);
+
+        let true_expr = ConditionExpression::constant(true);
+        let false_expr = ConditionExpression::constant(false);
+
+        let true_bdd = expression_to_bdd(&true_expr, &map).unwrap();
+        let false_bdd = expression_to_bdd(&false_expr, &map).unwrap();
+
+        assert!(true_bdd.is_true());
+        assert!(false_bdd.is_false());
+    }
+
+    #[test]
+    fn test_expression_to_bdd_statement() {
+        let statements = vec![Statement::from(0)];
+        let map = DirectMap::new(&statements);
+
+        let stmt_expr = ConditionExpression::statement(Statement::from(0));
+        let stmt_bdd = expression_to_bdd(&stmt_expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!stmt_bdd.is_true());
+        assert!(!stmt_bdd.is_false());
+
+        // Should be equivalent to the literal
+        let expected = map.get_literal(Statement::from(0), true);
+        assert!(stmt_bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_negation() {
+        let statements = vec![Statement::from(0)];
+        let map = DirectMap::new(&statements);
+
+        let stmt_expr = ConditionExpression::statement(Statement::from(0));
+        let neg_expr = ConditionExpression::negation(stmt_expr);
+        let neg_bdd = expression_to_bdd(&neg_expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!neg_bdd.is_true());
+        assert!(!neg_bdd.is_false());
+
+        // Should be equivalent to negated literal
+        let expected = map.get_literal(Statement::from(0), false);
+        assert!(neg_bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_symbolic_adf_basic() {
+        let adf_str = r#"
+            s(0).
+            s(1).
+            ac(0, 1).
+            ac(1, c(v)).
+        "#;
+
+        let expr_adf = ExpressionAdf::parse(adf_str).expect("Failed to parse ADF");
+        let symbolic_adf = SymbolicAdf::from(&expr_adf);
+
+        // Check direct encoding
+        let direct = symbolic_adf.direct_encoding();
+        assert_eq!(direct.conditional_statements().count(), 2);
+        assert!(direct.get_condition(Statement::from(0)).is_some());
+        assert!(direct.get_condition(Statement::from(1)).is_some());
+
+        // Check dual encoding
+        let dual = symbolic_adf.dual_encoding();
+        assert_eq!(dual.conditional_statements().count(), 2);
+        assert!(dual.get_condition(Statement::from(0)).is_some());
+        assert!(dual.get_condition(Statement::from(1)).is_some());
+    }
+
+    #[test]
+    fn test_direct_encoding_accessors() {
+        let adf_str = r#"
+            s(0).
+            ac(0, c(v)).
+        "#;
+
+        let expr_adf = ExpressionAdf::parse(adf_str).expect("Failed to parse ADF");
+        let symbolic_adf = SymbolicAdf::from(&expr_adf);
+
+        let direct = symbolic_adf.direct_encoding();
+
+        // Test var_map accessor
+        let var_map = direct.var_map();
+        assert!(var_map.get(Statement::from(0)).is_some());
+
+        // Test get_condition
+        let condition = direct.get_condition(Statement::from(0));
+        assert!(condition.is_some());
+        assert!(condition.unwrap().is_true());
+
+        // Test conditional_statements
+        let statements: Vec<_> = direct.conditional_statements().copied().collect();
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0], Statement::from(0));
+    }
+
+    #[test]
+    fn test_dual_encoding_accessors() {
+        let adf_str = r#"
+            s(0).
+            ac(0, c(v)).
+        "#;
+
+        let expr_adf = ExpressionAdf::parse(adf_str).expect("Failed to parse ADF");
+        let symbolic_adf = SymbolicAdf::from(&expr_adf);
+
+        let dual = symbolic_adf.dual_encoding();
+
+        // Test var_map accessor
+        let var_map = dual.var_map();
+        assert!(var_map.get(Statement::from(0)).is_some());
+
+        // Test get_condition
+        let condition = dual.get_condition(Statement::from(0));
+        assert!(condition.is_some());
+        let (can_be_true, can_be_false) = condition.unwrap();
+
+        // Both BDDs should exist (we don't make assumptions about their exact values
+        // as they depend on the dual encoding transformation)
+        assert!(can_be_true.node_count() > 0);
+        assert!(can_be_false.node_count() > 0);
+
+        // Test conditional_statements
+        let statements: Vec<_> = dual.conditional_statements().copied().collect();
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0], Statement::from(0));
+    }
+}
