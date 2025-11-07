@@ -152,6 +152,24 @@ impl ConditionExpression {
     }
 }
 
+impl ConditionExpression {
+    /// Parse a condition expression from a string.
+    ///
+    /// Supports the following syntax:
+    /// - `42` - Statement reference
+    /// - `c(v)` - Constant true (verum)
+    /// - `c(f)` - Constant false (falsum)
+    /// - `neg(expr)` - Negation
+    /// - `and(expr1, expr2, ...)` - Logical AND
+    /// - `or(expr1, expr2, ...)` - Logical OR
+    /// - `xor(expr1, expr2)` - Exclusive OR
+    /// - `imp(expr1, expr2)` - Implication
+    /// - `iff(expr1, expr2)` - Equivalence
+    pub fn parse(input: &str) -> Result<Self, String> {
+        crate::condition_expression_parser::parse(input)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
