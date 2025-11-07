@@ -247,6 +247,39 @@ impl ExpressionAdf {
             self.add_statement(statement);
         }
     }
+
+    /// Write the ADF to a string in the `.adf` file format.
+    ///
+    /// The format consists of:
+    /// - `s(number).` for each statement
+    /// - `ac(number, expression).` for statements with conditions
+    ///
+    /// Statements are written in sorted order by their number.
+    /// This matches the format used in test files where both s(N) and ac(N, ...)
+    /// can appear for the same statement.
+    pub fn write(&self) -> String {
+        let mut output = String::new();
+
+        // First pass: write all s(N) declarations
+        for statement in self.conditions.keys() {
+            output.push_str(&format!("s({}).\n", statement.into_index()));
+        }
+
+        // Second pass: write all ac(N, expr) declarations
+        for (statement, condition) in &self.conditions {
+            if let Some(expr) = condition {
+                output.push_str(&format!("ac({},{}).\n", statement.into_index(), expr));
+            }
+        }
+
+        output
+    }
+
+    /// Write the ADF to a file in the `.adf` file format.
+    pub fn write_file(&self, path: impl AsRef<std::path::Path>) -> Result<(), String> {
+        let content = self.write();
+        std::fs::write(path.as_ref(), content).map_err(|e| format!("Failed to write file: {}", e))
+    }
 }
 
 impl Default for ExpressionAdf {
@@ -1135,5 +1168,265 @@ ac(1, and(2, 3)).
 
         // Clean up
         fs::remove_file(temp_file).unwrap();
+    }
+
+    // Tests for write
+    #[test]
+    fn test_write_empty() {
+        let adf = ExpressionAdf::new();
+        let output = adf.write();
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn test_write_statement_without_condition() {
+        let mut adf = ExpressionAdf::new();
+        adf.add_statement(Statement::from(1));
+        let output = adf.write();
+        assert_eq!(output, "s(1).\n");
+    }
+
+    #[test]
+    fn test_write_statement_with_condition() {
+        let mut adf = ExpressionAdf::new();
+        adf.add_condition(Statement::from(1), ConditionExpression::constant(true))
+            .unwrap();
+        let output = adf.write();
+        assert_eq!(output, "s(1).\nac(1,c(v)).\n");
+    }
+
+    #[test]
+    fn test_write_mixed_statements() {
+        let mut adf = ExpressionAdf::new();
+        adf.add_statement(Statement::from(1));
+        adf.add_condition(Statement::from(2), ConditionExpression::constant(false))
+            .unwrap();
+        adf.add_statement(Statement::from(3));
+        let output = adf.write();
+        let expected = "s(1).\ns(2).\ns(3).\nac(2,c(f)).\n";
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_write_complex_expression() {
+        let mut adf = ExpressionAdf::new();
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(2)),
+            ConditionExpression::negation(ConditionExpression::statement(Statement::from(3))),
+        ]);
+        adf.add_condition(Statement::from(1), expr).unwrap();
+        let output = adf.write();
+        assert_eq!(output, "s(1).\nac(1,and(2,neg(3))).\n");
+    }
+
+    #[test]
+    fn test_write_sorted_order() {
+        let mut adf = ExpressionAdf::new();
+        // Add in random order
+        adf.add_statement(Statement::from(5));
+        adf.add_statement(Statement::from(1));
+        adf.add_statement(Statement::from(3));
+        let output = adf.write();
+        // Should be written in sorted order
+        let expected = "s(1).\ns(3).\ns(5).\n";
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_write_parse_roundtrip() {
+        let input = "s(1).\ns(2).\nac(1,c(v)).\nac(2,neg(1)).\n";
+        let adf = ExpressionAdf::parse(input).unwrap();
+        let output = adf.write();
+
+        // Parse the output and compare
+        let adf2 = ExpressionAdf::parse(&output).unwrap();
+        assert_eq!(adf, adf2);
+    }
+
+    #[test]
+    fn test_write_real_example() {
+        let input = r#"
+s(7).
+s(4).
+s(8).
+s(3).
+s(5).
+s(9).
+s(10).
+s(1).
+s(6).
+s(2).
+ac(7,c(v)).
+ac(4,6).
+ac(8,or(neg(1),7)).
+ac(3,and(or(7,neg(6)),2)).
+ac(5,4).
+ac(9,neg(7)).
+ac(10,and(neg(2),6)).
+ac(1,and(neg(7),2)).
+ac(6,neg(7)).
+ac(2,and(neg(9),neg(6))).
+"#;
+        let adf = ExpressionAdf::parse(input).unwrap();
+        let output = adf.write();
+
+        // Parse the output
+        let adf2 = ExpressionAdf::parse(&output).unwrap();
+
+        // Should be equal
+        assert_eq!(adf, adf2);
+
+        // Check that all statements are declared and have conditions
+        for i in 1..=10 {
+            assert!(output.contains(&format!("s({}).", i)));
+            assert!(output.contains(&format!("ac({},", i)));
+        }
+    }
+
+    // Tests for write_file
+    #[test]
+    fn test_write_file_success() {
+        use std::fs;
+
+        let mut adf = ExpressionAdf::new();
+        adf.add_statement(Statement::from(1));
+        adf.add_condition(Statement::from(2), ConditionExpression::constant(true))
+            .unwrap();
+
+        let temp_file = "test_temp_write.adf";
+        adf.write_file(temp_file).unwrap();
+
+        // Read back and verify
+        let content = fs::read_to_string(temp_file).unwrap();
+        assert_eq!(content, "s(1).\ns(2).\nac(2,c(v)).\n");
+
+        // Clean up
+        fs::remove_file(temp_file).unwrap();
+    }
+
+    #[test]
+    fn test_write_file_roundtrip() {
+        use std::fs;
+
+        let mut adf = ExpressionAdf::new();
+        adf.add_condition(
+            Statement::from(1),
+            ConditionExpression::or(&[
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+            ]),
+        )
+        .unwrap();
+        adf.add_statement(Statement::from(2));
+        adf.add_statement(Statement::from(3));
+
+        let temp_file = "test_temp_roundtrip.adf";
+        adf.write_file(temp_file).unwrap();
+
+        // Read back and parse
+        let adf2 = ExpressionAdf::parse_file(temp_file).unwrap();
+        assert_eq!(adf, adf2);
+
+        // Clean up
+        fs::remove_file(temp_file).unwrap();
+    }
+
+    // Comprehensive test: parse and write all test instances
+    #[test]
+    fn test_parse_write_all_test_instances() {
+        use std::collections::HashSet;
+        use std::fs;
+        use std::path::Path;
+
+        let test_dir = Path::new("test_instances");
+        if !test_dir.exists() {
+            // Skip test if directory doesn't exist
+            return;
+        }
+
+        let entries = fs::read_dir(test_dir).unwrap();
+        let mut count = 0;
+        let mut errors = Vec::new();
+
+        for entry in entries {
+            let entry = entry.unwrap();
+            let path = entry.path();
+
+            if path.extension().and_then(|s| s.to_str()) == Some("adf") {
+                count += 1;
+                let original_content = fs::read_to_string(&path).unwrap();
+
+                match ExpressionAdf::parse(&original_content) {
+                    Ok(adf) => {
+                        // Write it back
+                        let written_content = adf.write();
+
+                        // Parse the written content
+                        match ExpressionAdf::parse(&written_content) {
+                            Ok(adf2) => {
+                                // The ADFs should be equal
+                                if adf != adf2 {
+                                    errors.push((
+                                        path.clone(),
+                                        "ADF changed after parse-write-parse roundtrip".to_string(),
+                                    ));
+                                    continue;
+                                }
+
+                                // Compare line sets (order may differ)
+                                let original_lines: HashSet<&str> = original_content
+                                    .lines()
+                                    .map(|l| l.trim())
+                                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                                    .collect();
+
+                                let written_lines: HashSet<&str> = written_content
+                                    .lines()
+                                    .map(|l| l.trim())
+                                    .filter(|l| !l.is_empty())
+                                    .collect();
+
+                                if original_lines != written_lines {
+                                    errors.push((
+                                        path.clone(),
+                                        format!(
+                                            "Line sets differ. Original: {}, Written: {}",
+                                            original_lines.len(),
+                                            written_lines.len()
+                                        ),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                errors.push((
+                                    path.clone(),
+                                    format!("Failed to parse written content: {}", e),
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        errors.push((path.clone(), format!("Failed to parse original: {}", e)));
+                    }
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            eprintln!(
+                "Failed roundtrip test on {} out of {} files:",
+                errors.len(),
+                count
+            );
+            for (path, error) in &errors {
+                eprintln!("  {:?}: {}", path, error);
+            }
+            panic!("Some test instances failed roundtrip test");
+        }
+
+        println!(
+            "Successfully roundtrip tested {} test instance files",
+            count
+        );
     }
 }
