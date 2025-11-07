@@ -7,6 +7,5 @@ mod statement;
 
 pub use adf_expression::ExpressionAdf;
 pub use adf_symbolic::SymbolicAdf;
-pub(crate) use adf_symbolic::{DirectEncoding, DirectMap, DualEncoding, DualMap};
 pub use condition_expression::ConditionExpression;
 pub use statement::Statement;

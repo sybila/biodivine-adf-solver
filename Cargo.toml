@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 ruddy = "0.0.1"
+cancel-this = "0.3.0"

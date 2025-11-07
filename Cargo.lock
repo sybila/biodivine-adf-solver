@@ -6,8 +6,38 @@ version = 4
 name = "biodivine-adf-solver"
 version = "0.1.0"
 dependencies = [
+ "cancel-this",
  "ruddy",
 ]
+
+[[package]]
+name = "cancel-this"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dbfe919e149bf789bccb726b94c4fe5e8a8e122c86f654c2e662193565d16af"
+dependencies = [
+ "dyn-clone",
+ "lazy_static",
+ "log",
+]
+
+[[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
+name = "log"
+version = "0.4.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 
 [[package]]
 name = "replace_with"

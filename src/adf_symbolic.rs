@@ -1,4 +1,5 @@
 use crate::{ConditionExpression, ExpressionAdf, Statement};
+use cancel_this::{Cancellable, is_cancelled};
 use ruddy::VariableId;
 use ruddy::split::Bdd;
 use std::collections::BTreeMap;
@@ -13,7 +14,7 @@ pub struct DirectMap {
 }
 
 impl DirectMap {
-    /// Create a new DirectMap from an ordered list of statements.
+    /// Create a new [`DirectMap`] from an ordered list of [`Statement`] objects.
     pub fn new(statements: &[Statement]) -> Self {
         let mapping = statements
             .iter()
@@ -25,14 +26,20 @@ impl DirectMap {
         DirectMap { mapping }
     }
 
-    /// Get the BDD variable ID for a statement.
-    pub fn get(&self, statement: &Statement) -> Option<VariableId> {
-        self.mapping.get(statement).copied()
+    /// Get the BDD [`VariableId`] for a [`Statement`].
+    pub fn get(&self, statement: Statement) -> Option<VariableId> {
+        self.mapping.get(&statement).copied()
     }
 
     /// Get ordered list of all [`Statement`] objects in the map.
     pub fn statements(&self) -> Vec<Statement> {
         self.mapping.keys().copied().collect()
+    }
+
+    /// Create a [`Bdd`] literal for the given [`Statement`].    
+    pub fn get_literal(&self, statement: Statement, polarity: bool) -> Bdd {
+        let var = self[&statement];
+        Bdd::new_literal(var, polarity)
     }
 }
 
@@ -64,7 +71,7 @@ pub struct DualMap {
 }
 
 impl DualMap {
-    /// Create a new DualMap from an ordered list of statements.
+    /// Create a new [`DualMap`] from an ordered list of [`Statement`] objects.
     /// For each statement, two consecutive variable IDs are allocated (positive, then negative).
     pub fn new(statements: &[Statement]) -> Self {
         let mapping = statements
@@ -79,14 +86,36 @@ impl DualMap {
         DualMap { mapping }
     }
 
-    /// Get the BDD variable IDs (positive, negative) for a statement.
-    pub fn get(&self, statement: &Statement) -> Option<(VariableId, VariableId)> {
-        self.mapping.get(statement).copied()
+    /// Get the BDD [`VariableId`]s (positive, negative) for a [`Statement`].
+    pub fn get(&self, statement: Statement) -> Option<(VariableId, VariableId)> {
+        self.mapping.get(&statement).copied()
     }
 
     /// Get ordered list of all [`Statement`] objects in the map.
     pub fn statements(&self) -> Vec<Statement> {
         self.mapping.keys().copied().collect()
+    }
+
+    /// Create [`Bdd`] literals for both the positive and negative dual variables.
+    ///
+    /// Returns a tuple `(positive_literal, negative_literal)` where:
+    /// - `positive_literal` is a [`Bdd`] representing the "can be true" variable
+    /// - `negative_literal` is a [`Bdd`] representing the "can be false" variable
+    pub fn get_literals(&self, statement: Statement) -> (Bdd, Bdd) {
+        let (t_var, f_var) = self[&statement];
+        (Bdd::new_literal(t_var, true), Bdd::new_literal(f_var, true))
+    }
+
+    /// Create a [`Bdd`] literal for the positive dual variable (can be true).
+    pub fn get_positive_literal(&self, statement: Statement) -> Bdd {
+        let (t_var, _) = self[&statement];
+        Bdd::new_literal(t_var, true)
+    }
+
+    /// Create a [`Bdd`] literal for the negative dual variable (can be false).
+    pub fn get_negative_literal(&self, statement: Statement) -> Bdd {
+        let (_, f_var) = self[&statement];
+        Bdd::new_literal(f_var, true)
     }
 }
 
@@ -123,9 +152,9 @@ impl DirectEncoding {
         &self.var_map
     }
 
-    /// Get the BDD condition for a statement, if it exists.
-    pub fn get_condition(&self, statement: &Statement) -> Option<&Bdd> {
-        self.conditions.get(statement)
+    /// Get the [`Bdd`] condition for a [`Statement`], if it exists.
+    pub fn get_condition(&self, statement: Statement) -> Option<&Bdd> {
+        self.conditions.get(&statement)
     }
 
     /// Get all statements that have conditions.
@@ -154,9 +183,9 @@ impl DualEncoding {
         &self.var_map
     }
 
-    /// Get the BDD conditions (can_be_true, can_be_false) for a statement, if they exist.
-    pub fn get_condition(&self, statement: &Statement) -> Option<(&Bdd, &Bdd)> {
-        self.conditions.get(statement).map(|(t, f)| (t, f))
+    /// Get the [`Bdd`] conditions (can_be_true, can_be_false) for a [`Statement`], if they exist.
+    pub fn get_condition(&self, statement: Statement) -> Option<(&Bdd, &Bdd)> {
+        self.conditions.get(&statement).map(|(t, f)| (t, f))
     }
 
     /// Get all statements that have conditions.
@@ -167,7 +196,7 @@ impl DualEncoding {
 
 /// A [`SymbolicAdf`] encodes an ADF symbolically using BDDs.
 ///
-/// Internally, it uses two encodings, depending on use case. Direct encoding uses one BDD
+/// Internally, it uses two encodings, depending on use case. Direct encoding uses one [`Bdd`]
 /// variable per statement, while dual encoding uses two.
 pub struct SymbolicAdf {
     direct_encoding: DirectEncoding,
@@ -184,10 +213,12 @@ impl SymbolicAdf {
     pub fn dual_encoding(&self) -> &DualEncoding {
         &self.dual_encoding
     }
-}
 
-impl From<&ExpressionAdf> for SymbolicAdf {
-    fn from(adf: &ExpressionAdf) -> Self {
+    /// Try to create a SymbolicAdf from an ExpressionAdf.
+    ///
+    /// This operation is cancellable using the `cancel-this` crate. If cancelled,
+    /// it will return an error.
+    pub fn try_from_expressions(adf: &ExpressionAdf) -> Cancellable<Self> {
         // Get all statements in sorted order
         let statements: Vec<Statement> = adf.statements().copied().collect();
 
@@ -198,8 +229,9 @@ impl From<&ExpressionAdf> for SymbolicAdf {
         // Build direct encoding conditions
         let mut direct_conditions = BTreeMap::new();
         for statement in &statements {
+            is_cancelled!()?;
             if let Some(expr) = adf.get_condition(statement) {
-                let bdd = expression_to_bdd(expr, &direct_map);
+                let bdd = expression_to_bdd(expr, &direct_map)?;
                 direct_conditions.insert(*statement, bdd);
             }
         }
@@ -207,15 +239,16 @@ impl From<&ExpressionAdf> for SymbolicAdf {
         // Build dual encoding conditions from direct encoding
         let mut dual_conditions = BTreeMap::new();
         for statement in &statements {
+            is_cancelled!()?;
             if let Some(direct_bdd) = direct_conditions.get(statement) {
-                let can_be_true = direct_to_dual_encoding(direct_bdd, &direct_map, &dual_map);
+                let can_be_true = direct_to_dual_encoding(direct_bdd, &direct_map, &dual_map)?;
                 let can_be_false =
-                    direct_to_dual_encoding(&direct_bdd.not(), &direct_map, &dual_map);
+                    direct_to_dual_encoding(&direct_bdd.not(), &direct_map, &dual_map)?;
                 dual_conditions.insert(*statement, (can_be_true, can_be_false));
             }
         }
 
-        SymbolicAdf {
+        Ok(SymbolicAdf {
             direct_encoding: DirectEncoding {
                 var_map: direct_map,
                 conditions: direct_conditions,
@@ -224,7 +257,15 @@ impl From<&ExpressionAdf> for SymbolicAdf {
                 var_map: dual_map,
                 conditions: dual_conditions,
             },
-        }
+        })
+    }
+}
+
+impl From<&ExpressionAdf> for SymbolicAdf {
+    fn from(adf: &ExpressionAdf) -> Self {
+        // Use the cancellable version, but panic if cancelled
+        SymbolicAdf::try_from_expressions(adf)
+            .expect("Conversion from ExpressionAdf to SymbolicAdf was cancelled")
     }
 }
 
@@ -235,60 +276,68 @@ impl From<ExpressionAdf> for SymbolicAdf {
 }
 
 /// Convert a ConditionExpression to a BDD using direct encoding.
-fn expression_to_bdd(expr: &ConditionExpression, var_map: &DirectMap) -> Bdd {
+///
+/// This function is cancellable and will check for cancellation at each recursive step.
+fn expression_to_bdd(expr: &ConditionExpression, var_map: &DirectMap) -> Cancellable<Bdd> {
+    // Check for cancellation
+    is_cancelled!()?;
+
     // Check for constant
     if let Some(value) = expr.as_constant() {
         return if value {
-            Bdd::new_true()
+            Ok(Bdd::new_true())
         } else {
-            Bdd::new_false()
+            Ok(Bdd::new_false())
         };
     }
 
     // Check for statement reference
     if let Some(stmt) = expr.as_statement() {
-        let var = var_map[&stmt];
-        return Bdd::new_literal(var, true);
+        return Ok(var_map.get_literal(stmt, true));
     }
 
     // Check for negation
     if let Some(operand) = expr.as_negation() {
-        return expression_to_bdd(operand, var_map).not();
+        return Ok(expression_to_bdd(operand, var_map)?.not());
     }
 
     // Check for AND
     if let Some(operands) = expr.as_and() {
-        return operands.iter().fold(Bdd::new_true(), |acc, op| {
-            acc.and(&expression_to_bdd(op, var_map))
-        });
+        let mut result = Bdd::new_true();
+        for op in operands {
+            result = result.and(&expression_to_bdd(op, var_map)?);
+        }
+        return Ok(result);
     }
 
     // Check for OR
     if let Some(operands) = expr.as_or() {
-        return operands.iter().fold(Bdd::new_false(), |acc, op| {
-            acc.or(&expression_to_bdd(op, var_map))
-        });
+        let mut result = Bdd::new_false();
+        for op in operands {
+            result = result.or(&expression_to_bdd(op, var_map)?);
+        }
+        return Ok(result);
     }
 
     // Check for implication
     if let Some((left, right)) = expr.as_implication() {
-        let left_bdd = expression_to_bdd(left, var_map);
-        let right_bdd = expression_to_bdd(right, var_map);
-        return left_bdd.not().or(&right_bdd);
+        let left_bdd = expression_to_bdd(left, var_map)?;
+        let right_bdd = expression_to_bdd(right, var_map)?;
+        return Ok(left_bdd.not().or(&right_bdd));
     }
 
     // Check for equivalence
     if let Some((left, right)) = expr.as_equivalence() {
-        let left_bdd = expression_to_bdd(left, var_map);
-        let right_bdd = expression_to_bdd(right, var_map);
-        return left_bdd.iff(&right_bdd);
+        let left_bdd = expression_to_bdd(left, var_map)?;
+        let right_bdd = expression_to_bdd(right, var_map)?;
+        return Ok(left_bdd.iff(&right_bdd));
     }
 
     // Check for exclusive OR
     if let Some((left, right)) = expr.as_exclusive_or() {
-        let left_bdd = expression_to_bdd(left, var_map);
-        let right_bdd = expression_to_bdd(right, var_map);
-        return left_bdd.xor(&right_bdd);
+        let left_bdd = expression_to_bdd(left, var_map)?;
+        let right_bdd = expression_to_bdd(right, var_map)?;
+        return Ok(left_bdd.xor(&right_bdd));
     }
 
     panic!("Unknown expression type");
@@ -298,25 +347,34 @@ fn expression_to_bdd(expr: &ConditionExpression, var_map: &DirectMap) -> Bdd {
 ///
 /// This applies the principle: for each state variable, we add constraints
 /// (state_var => t_var) & (!state_var => f_var) and then existentially quantify state_var.
-fn direct_to_dual_encoding(function: &Bdd, direct_map: &DirectMap, dual_map: &DualMap) -> Bdd {
+///
+/// This function is cancellable and will check for cancellation at each iteration.
+fn direct_to_dual_encoding(
+    function: &Bdd,
+    direct_map: &DirectMap,
+    dual_map: &DualMap,
+) -> Cancellable<Bdd> {
     // Get all statements in the direct map (in reverse order for efficiency)
     let statements = direct_map.statements();
     let mut result = function.clone();
 
     // Process variables in reverse order for efficiency
     for statement in statements.iter().rev() {
-        let var = direct_map[statement];
-        let (t_var, f_var) = dual_map[statement];
+        // Check for cancellation at each iteration
+        is_cancelled!()?;
+
+        let state_var = direct_map[statement];
+        let (t_lit, f_lit) = dual_map.get_literals(*statement);
 
         // Create the constraint: (state_var => t_var) & (!state_var => f_var)
         // This is equivalent to: (!state_var | t_var) & (state_var | f_var)
-        let state_implies_t = Bdd::new_literal(var, false).or(&Bdd::new_literal(t_var, true));
-        let not_state_implies_f = Bdd::new_literal(var, true).or(&Bdd::new_literal(f_var, true));
+        let state_implies_t = direct_map.get_literal(*statement, false).or(&t_lit);
+        let not_state_implies_f = direct_map.get_literal(*statement, true).or(&f_lit);
         let is_in_space = state_implies_t.and(&not_state_implies_f);
 
         // Apply constraint and existentially quantify the state variable
-        result = result.and(&is_in_space).exists(&[var]);
+        result = result.and(&is_in_space).exists(&[state_var]);
     }
 
-    result
+    Ok(result)
 }
