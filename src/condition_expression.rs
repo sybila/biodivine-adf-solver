@@ -1,9 +1,12 @@
 use crate::statement::Statement;
 use std::sync::Arc;
 
+/// Represents a single Boolean expression over [`Statement`] references. It can be parsed
+/// and written into the `.adf` text format.
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub struct ConditionExpression(Arc<ConditionExpressionNode>);
 
+/// Internal enum data structure of [`ConditionExpression`].
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
 enum ConditionExpressionNode {
     Constant(bool),
