@@ -274,68 +274,53 @@ impl From<AdfExpressions> for AdfBdds {
 ///
 /// This function is cancellable and will check for cancellation at each recursive step.
 fn expression_to_bdd(expr: &ConditionExpression, var_map: &DirectMap) -> Cancellable<Bdd> {
+    use crate::condition_expression::ConditionExpressionNode::{
+        And, Constant, Equivalence, ExclusiveOr, Implication, Negation, Or, Statement,
+    };
+
     // Check for cancellation
     is_cancelled!()?;
 
-    // Check for constant
-    if let Some(value) = expr.as_constant() {
-        return if value {
-            Ok(Bdd::new_true())
-        } else {
-            Ok(Bdd::new_false())
-        };
-    }
-
-    // Check for statement reference
-    if let Some(stmt) = expr.as_statement() {
-        return Ok(var_map.get_literal(stmt, true));
-    }
-
-    // Check for negation
-    if let Some(operand) = expr.as_negation() {
-        return Ok(expression_to_bdd(operand, var_map)?.not());
-    }
-
-    // Check for AND
-    if let Some(operands) = expr.as_and() {
-        let mut result = Bdd::new_true();
-        for op in operands {
-            result = result.and(&expression_to_bdd(op, var_map)?);
+    match &*expr.0 {
+        Constant(value) => {
+            if *value {
+                Ok(Bdd::new_true())
+            } else {
+                Ok(Bdd::new_false())
+            }
         }
-        return Ok(result);
-    }
-
-    // Check for OR
-    if let Some(operands) = expr.as_or() {
-        let mut result = Bdd::new_false();
-        for op in operands {
-            result = result.or(&expression_to_bdd(op, var_map)?);
+        Statement(stmt) => Ok(var_map.get_literal(*stmt, true)),
+        Negation(operand) => Ok(expression_to_bdd(operand, var_map)?.not()),
+        And(operands) => {
+            let mut result = Bdd::new_true();
+            for op in operands {
+                result = result.and(&expression_to_bdd(op, var_map)?);
+            }
+            Ok(result)
         }
-        return Ok(result);
+        Or(operands) => {
+            let mut result = Bdd::new_false();
+            for op in operands {
+                result = result.or(&expression_to_bdd(op, var_map)?);
+            }
+            Ok(result)
+        }
+        Implication(left, right) => {
+            let left_bdd = expression_to_bdd(left, var_map)?;
+            let right_bdd = expression_to_bdd(right, var_map)?;
+            Ok(left_bdd.not().or(&right_bdd))
+        }
+        Equivalence(left, right) => {
+            let left_bdd = expression_to_bdd(left, var_map)?;
+            let right_bdd = expression_to_bdd(right, var_map)?;
+            Ok(left_bdd.iff(&right_bdd))
+        }
+        ExclusiveOr(left, right) => {
+            let left_bdd = expression_to_bdd(left, var_map)?;
+            let right_bdd = expression_to_bdd(right, var_map)?;
+            Ok(left_bdd.xor(&right_bdd))
+        }
     }
-
-    // Check for implication
-    if let Some((left, right)) = expr.as_implication() {
-        let left_bdd = expression_to_bdd(left, var_map)?;
-        let right_bdd = expression_to_bdd(right, var_map)?;
-        return Ok(left_bdd.not().or(&right_bdd));
-    }
-
-    // Check for equivalence
-    if let Some((left, right)) = expr.as_equivalence() {
-        let left_bdd = expression_to_bdd(left, var_map)?;
-        let right_bdd = expression_to_bdd(right, var_map)?;
-        return Ok(left_bdd.iff(&right_bdd));
-    }
-
-    // Check for exclusive OR
-    if let Some((left, right)) = expr.as_exclusive_or() {
-        let left_bdd = expression_to_bdd(left, var_map)?;
-        let right_bdd = expression_to_bdd(right, var_map)?;
-        return Ok(left_bdd.xor(&right_bdd));
-    }
-
-    panic!("Unknown expression type");
 }
 
 /// Convert a direct encoding BDD to a dual encoding BDD.
@@ -670,5 +655,253 @@ mod tests {
         let statements: Vec<_> = dual.conditional_statements().copied().collect();
         assert_eq!(statements.len(), 1);
         assert_eq!(statements[0], Statement::from(0));
+    }
+
+    // Test for From<AdfExpressions> implementation
+    #[test]
+    fn test_from_adf_expressions_owned() {
+        let adf_str = r#"
+            s(0).
+            s(1).
+            ac(0, 1).
+            ac(1, c(v)).
+        "#;
+
+        let expr_adf = AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        // Test the From implementation which takes ownership
+        let symbolic_adf = AdfBdds::from(expr_adf);
+
+        // Verify that the conversion worked correctly
+        let direct = symbolic_adf.direct_encoding();
+        assert_eq!(direct.conditional_statements().count(), 2);
+        assert!(direct.get_condition(Statement::from(0)).is_some());
+        assert!(direct.get_condition(Statement::from(1)).is_some());
+
+        let dual = symbolic_adf.dual_encoding();
+        assert_eq!(dual.conditional_statements().count(), 2);
+    }
+
+    // Comprehensive tests for expression_to_bdd function
+
+    #[test]
+    fn test_expression_to_bdd_and() {
+        let statements = vec![Statement::from(0), Statement::from(1)];
+        let map = DirectMap::new(&statements);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(0)),
+            ConditionExpression::statement(Statement::from(1)),
+        ]);
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!bdd.is_true());
+        assert!(!bdd.is_false());
+
+        // Verify the BDD represents AND correctly by checking it's true only when both are true
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let expected = s0_lit.and(&s1_lit);
+        assert!(bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_or() {
+        let statements = vec![Statement::from(0), Statement::from(1)];
+        let map = DirectMap::new(&statements);
+
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::statement(Statement::from(0)),
+            ConditionExpression::statement(Statement::from(1)),
+        ]);
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!bdd.is_true());
+        assert!(!bdd.is_false());
+
+        // Verify the BDD represents OR correctly
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let expected = s0_lit.or(&s1_lit);
+        assert!(bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_implication() {
+        let statements = vec![Statement::from(0), Statement::from(1)];
+        let map = DirectMap::new(&statements);
+
+        let expr = ConditionExpression::implication(
+            ConditionExpression::statement(Statement::from(0)),
+            ConditionExpression::statement(Statement::from(1)),
+        );
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!bdd.is_true());
+        assert!(!bdd.is_false());
+
+        // Implication: (s0 -> s1) is equivalent to (!s0 | s1)
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let expected = s0_lit.not().or(&s1_lit);
+        assert!(bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_equivalence() {
+        let statements = vec![Statement::from(0), Statement::from(1)];
+        let map = DirectMap::new(&statements);
+
+        let expr = ConditionExpression::equivalence(
+            ConditionExpression::statement(Statement::from(0)),
+            ConditionExpression::statement(Statement::from(1)),
+        );
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!bdd.is_true());
+        assert!(!bdd.is_false());
+
+        // Verify the BDD represents equivalence correctly
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let expected = s0_lit.iff(&s1_lit);
+        assert!(bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_exclusive_or() {
+        let statements = vec![Statement::from(0), Statement::from(1)];
+        let map = DirectMap::new(&statements);
+
+        let expr = ConditionExpression::exclusive_or(
+            ConditionExpression::statement(Statement::from(0)),
+            ConditionExpression::statement(Statement::from(1)),
+        );
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!bdd.is_true());
+        assert!(!bdd.is_false());
+
+        // Verify the BDD represents XOR correctly
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let expected = s0_lit.xor(&s1_lit);
+        assert!(bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_complex_nested() {
+        let statements = vec![Statement::from(0), Statement::from(1), Statement::from(2)];
+        let map = DirectMap::new(&statements);
+
+        // Build: (s0 AND s1) OR s2
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::and(&[
+                ConditionExpression::statement(Statement::from(0)),
+                ConditionExpression::statement(Statement::from(1)),
+            ]),
+            ConditionExpression::statement(Statement::from(2)),
+        ]);
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!bdd.is_true());
+        assert!(!bdd.is_false());
+
+        // Build the same BDD manually to verify
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s2_lit = map.get_literal(Statement::from(2), true);
+        let expected = s0_lit.and(&s1_lit).or(&s2_lit);
+        assert!(bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_and_multiple_operands() {
+        let statements = vec![
+            Statement::from(0),
+            Statement::from(1),
+            Statement::from(2),
+            Statement::from(3),
+        ];
+        let map = DirectMap::new(&statements);
+
+        // AND with 4 operands
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(0)),
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+            ConditionExpression::statement(Statement::from(3)),
+        ]);
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Build the same BDD manually
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s2_lit = map.get_literal(Statement::from(2), true);
+        let s3_lit = map.get_literal(Statement::from(3), true);
+        let expected = s0_lit.and(&s1_lit).and(&s2_lit).and(&s3_lit);
+        assert!(bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_or_multiple_operands() {
+        let statements = vec![
+            Statement::from(0),
+            Statement::from(1),
+            Statement::from(2),
+            Statement::from(3),
+        ];
+        let map = DirectMap::new(&statements);
+
+        // OR with 4 operands
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::statement(Statement::from(0)),
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+            ConditionExpression::statement(Statement::from(3)),
+        ]);
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Build the same BDD manually
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s2_lit = map.get_literal(Statement::from(2), true);
+        let s3_lit = map.get_literal(Statement::from(3), true);
+        let expected = s0_lit.or(&s1_lit).or(&s2_lit).or(&s3_lit);
+        assert!(bdd.structural_eq(&expected));
+    }
+
+    #[test]
+    fn test_expression_to_bdd_deeply_nested() {
+        let statements = vec![Statement::from(0), Statement::from(1), Statement::from(2)];
+        let map = DirectMap::new(&statements);
+
+        // Build: neg(s0 -> (s1 XOR s2))
+        let expr = ConditionExpression::negation(ConditionExpression::implication(
+            ConditionExpression::statement(Statement::from(0)),
+            ConditionExpression::exclusive_or(
+                ConditionExpression::statement(Statement::from(1)),
+                ConditionExpression::statement(Statement::from(2)),
+            ),
+        ));
+        let bdd = expression_to_bdd(&expr, &map).unwrap();
+
+        // Should not be a constant
+        assert!(!bdd.is_true());
+        assert!(!bdd.is_false());
+
+        // Build the same BDD manually to verify
+        let s0_lit = map.get_literal(Statement::from(0), true);
+        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s2_lit = map.get_literal(Statement::from(2), true);
+        let xor_part = s1_lit.xor(&s2_lit);
+        let implication = s0_lit.not().or(&xor_part);
+        let expected = implication.not();
+        assert!(bdd.structural_eq(&expected));
     }
 }

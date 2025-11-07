@@ -5,11 +5,11 @@ use std::sync::Arc;
 /// Represents a single Boolean expression over [`Statement`] references. It can be parsed
 /// and written into the `.adf` text format.
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
-pub struct ConditionExpression(Arc<ConditionExpressionNode>);
+pub struct ConditionExpression(pub(crate) Arc<ConditionExpressionNode>);
 
 /// Internal enum data structure of [`ConditionExpression`].
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
-enum ConditionExpressionNode {
+pub(crate) enum ConditionExpressionNode {
     Constant(bool),
     Statement(Statement),
     Negation(ConditionExpression),
