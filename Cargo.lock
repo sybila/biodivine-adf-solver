@@ -5,3 +5,28 @@ version = 4
 [[package]]
 name = "biodivine-adf-solver"
 version = "0.1.0"
+dependencies = [
+ "ruddy",
+]
+
+[[package]]
+name = "replace_with"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51743d3e274e2b18df81c4dc6caf8a5b8e15dbe799e0dca05c7617380094e884"
+
+[[package]]
+name = "ruddy"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cbf0c98fe469ab28d35efb552df8ed4630129d84daa90745688637ba6e20a61"
+dependencies = [
+ "replace_with",
+ "rustc-hash",
+]
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
