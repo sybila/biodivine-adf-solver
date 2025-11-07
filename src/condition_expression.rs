@@ -1,4 +1,5 @@
 use crate::statement::Statement;
+use std::fmt;
 use std::sync::Arc;
 
 /// Represents a single Boolean expression over [`Statement`] references. It can be parsed
@@ -189,6 +190,12 @@ impl ConditionExpression {
     }
 }
 
+impl fmt::Display for ConditionExpression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", crate::condition_expression_writer::write(self))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,5 +357,63 @@ mod tests {
         assert!(cond.as_implication().is_none());
         assert!(cond.as_equivalence().is_none());
         assert!(cond.as_exclusive_or().is_none());
+    }
+
+    // Display trait tests
+
+    #[test]
+    fn test_display_constant_true() {
+        let expr = ConditionExpression::constant(true);
+        assert_eq!(format!("{}", expr), "c(v)");
+        assert_eq!(expr.to_string(), "c(v)");
+    }
+
+    #[test]
+    fn test_display_constant_false() {
+        let expr = ConditionExpression::constant(false);
+        assert_eq!(format!("{}", expr), "c(f)");
+    }
+
+    #[test]
+    fn test_display_statement() {
+        let expr = ConditionExpression::statement(Statement::from(42));
+        assert_eq!(format!("{}", expr), "42");
+    }
+
+    #[test]
+    fn test_display_negation() {
+        let expr =
+            ConditionExpression::negation(ConditionExpression::statement(Statement::from(5)));
+        assert_eq!(format!("{}", expr), "neg(5)");
+    }
+
+    #[test]
+    fn test_display_and() {
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+        ]);
+        assert_eq!(format!("{}", expr), "and(1,2)");
+    }
+
+    #[test]
+    fn test_display_nested() {
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::negation(ConditionExpression::statement(Statement::from(1))),
+            ConditionExpression::statement(Statement::from(7)),
+        ]);
+        assert_eq!(format!("{}", expr), "or(neg(1),7)");
+    }
+
+    #[test]
+    fn test_display_parse_roundtrip() {
+        // Parse an expression, convert to string, parse again - should be equivalent
+        let original = "and(or(7,neg(6)),2)";
+        let parsed = ConditionExpression::parse(original).unwrap();
+        let displayed = format!("{}", parsed);
+        let reparsed = ConditionExpression::parse(&displayed).unwrap();
+
+        assert_eq!(displayed, original);
+        assert_eq!(format!("{}", reparsed), original);
     }
 }
