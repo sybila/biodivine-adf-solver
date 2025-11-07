@@ -18,7 +18,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 
     while let Some(&ch) = chars.peek() {
         match ch {
-            ' ' | '\t' | '\n' | '\r' => {
+            ch if ch.is_whitespace() => {
                 chars.next();
             }
             '(' => {
@@ -141,11 +141,7 @@ impl Parser {
                         self.expect(Token::LeftParen)?;
                         let expr = self.parse_expression()?;
                         self.expect(Token::RightParen)?;
-                        // Negation is represented as equivalence with false
-                        Ok(ConditionExpression::equivalence(
-                            expr,
-                            ConditionExpression::constant(false),
-                        ))
+                        Ok(ConditionExpression::negation(expr))
                     }
                     "and" => {
                         // AND: and(expr1, expr2, ...)
@@ -345,12 +341,10 @@ mod tests {
     #[test]
     fn test_parse_negation() {
         let expr = parse("neg(42)").unwrap();
-        // Negation is represented as equivalence with false
-        assert!(expr.is_equivalence());
-        let (left, right) = expr.as_equivalence().unwrap();
-        assert!(left.is_statement());
-        assert!(right.is_constant());
-        assert_eq!(right.as_constant(), Some(false));
+        assert!(expr.is_negation());
+        let operand = expr.as_negation().unwrap();
+        assert!(operand.is_statement());
+        assert_eq!(operand.as_statement(), Some(Statement::from(42)));
     }
 
     #[test]
@@ -413,7 +407,7 @@ mod tests {
         assert!(expr.is_or());
         let operands = expr.as_or().unwrap();
         assert_eq!(operands.len(), 2);
-        assert!(operands[0].is_equivalence()); // negation is equivalence
+        assert!(operands[0].is_negation());
         assert!(operands[1].is_statement());
     }
 
@@ -429,7 +423,7 @@ mod tests {
         let or_operands = operands[0].as_or().unwrap();
         assert_eq!(or_operands.len(), 2);
         assert!(or_operands[0].is_statement());
-        assert!(or_operands[1].is_equivalence()); // negation
+        assert!(or_operands[1].is_negation());
 
         assert!(operands[1].is_statement());
     }
@@ -482,7 +476,7 @@ mod tests {
         assert!(expr.is_or());
         let operands = expr.as_or().unwrap();
         assert_eq!(operands.len(), 2);
-        assert!(operands[0].is_equivalence()); // negation
+        assert!(operands[0].is_negation());
         assert!(operands[1].is_statement());
     }
 
@@ -509,8 +503,8 @@ mod tests {
         assert!(expr.is_and());
         let operands = expr.as_and().unwrap();
         assert_eq!(operands.len(), 2);
-        assert!(operands[0].is_equivalence()); // negation
-        assert!(operands[1].is_equivalence()); // negation
+        assert!(operands[0].is_negation());
+        assert!(operands[1].is_negation());
     }
 
     #[test]
