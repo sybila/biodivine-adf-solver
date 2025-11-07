@@ -245,11 +245,19 @@ impl AdfBdds {
         &self.dual_encoding
     }
 
-    /// Try to create a SymbolicAdf from an ExpressionAdf.
+    /// Try to create a [`AdfBdds`] from an [`AdfExpressions`].
     ///
     /// This operation is cancellable using the `cancel-this` crate. If cancelled,
     /// it will return an error.
+    ///
+    /// # Panics
+    ///
+    /// Conversion fails if [`AdfExpressions`] contains missing statements.
     pub fn try_from_expressions(adf: &AdfExpressions) -> Cancellable<Self> {
+        assert!(
+            adf.find_missing_statements().is_empty(),
+            "ADF contains missing statements."
+        );
         // Get all statements in sorted order
         let statements: Vec<Statement> = adf.statements().collect();
 
@@ -1133,5 +1141,54 @@ mod tests {
         }
 
         assert!(valid.structural_eq(&expected));
+    }
+
+    // Test that conversion fails when there are missing statements
+
+    #[test]
+    #[should_panic(expected = "ADF contains missing statements.")]
+    fn test_conversion_fails_with_missing_statements() {
+        // Create an ADF where a condition references a statement that is not declared
+        let adf_str = r#"
+            s(0).
+            ac(0, and(1, 2)).
+        "#;
+
+        // Parse without fixing missing statements - statements 1 and 2 are referenced but not declared
+        let expr_adf = AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+
+        // This should panic when trying to convert to BDDs because statements 1 and 2 don't exist
+        let _symbolic_adf = AdfBdds::from(&expr_adf);
+    }
+
+    #[test]
+    fn test_conversion_succeeds_with_fixed_missing_statements() {
+        // Create an ADF where a condition references statements that are not declared
+        let adf_str = r#"
+            s(0).
+            ac(0, and(1, 2)).
+        "#;
+
+        // Parse and fix missing statements
+        let mut expr_adf = AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        expr_adf.fix_missing_statements();
+
+        // Now the conversion should succeed because statements 1 and 2 have been added as free statements
+        let symbolic_adf = AdfBdds::from(&expr_adf);
+
+        // Verify that all three statements are present in the encoding
+        let direct = symbolic_adf.direct_encoding();
+        let var_map = direct.var_map();
+        let all_statements: Vec<_> = var_map.statements().collect();
+        assert_eq!(
+            all_statements,
+            vec![Statement::from(0), Statement::from(1), Statement::from(2)]
+        );
+
+        // Verify that only statement 0 has a condition
+        assert_eq!(direct.conditional_statements().count(), 1);
+        assert!(direct.get_condition(Statement::from(0)).is_some());
+        assert!(direct.get_condition(Statement::from(1)).is_none());
+        assert!(direct.get_condition(Statement::from(2)).is_none());
     }
 }
