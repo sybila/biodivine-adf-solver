@@ -19,18 +19,18 @@ impl AdfExpressions {
 
     /// Get the acceptance condition for a statement.
     /// Returns `None` if the statement doesn't exist or has no condition.
-    pub fn get_condition(&self, statement: &Statement) -> Option<&ConditionExpression> {
-        self.conditions.get(statement).and_then(|opt| opt.as_ref())
+    pub fn get_condition(&self, statement: Statement) -> Option<&ConditionExpression> {
+        self.conditions.get(&statement).and_then(|opt| opt.as_ref())
     }
 
     /// Check if a statement exists in the ADF (with or without a condition).
-    pub fn has_statement(&self, statement: &Statement) -> bool {
-        self.conditions.contains_key(statement)
+    pub fn has_statement(&self, statement: Statement) -> bool {
+        self.conditions.contains_key(&statement)
     }
 
     /// Get all statements in the ADF.
-    pub fn statements(&self) -> impl Iterator<Item = &Statement> {
-        self.conditions.keys()
+    pub fn statements(&self) -> impl Iterator<Item = Statement> {
+        self.conditions.keys().copied()
     }
 
     /// Get the number of statements in the ADF.
@@ -205,17 +205,17 @@ impl AdfExpressions {
 
     /// Get an iterator over all statements that have conditions.
     /// Returns pairs of (statement, condition).
-    pub fn conditions(&self) -> impl Iterator<Item = (&Statement, &ConditionExpression)> {
+    pub fn conditions(&self) -> impl Iterator<Item = (Statement, &ConditionExpression)> {
         self.conditions
             .iter()
-            .filter_map(|(stmt, cond)| cond.as_ref().map(|c| (stmt, c)))
+            .filter_map(|(stmt, cond)| cond.as_ref().map(|c| (*stmt, c)))
     }
 
     /// Get an iterator over all statements that have no condition.
-    pub fn free_statements(&self) -> impl Iterator<Item = &Statement> {
+    pub fn free_statements(&self) -> impl Iterator<Item = Statement> {
         self.conditions.iter().filter_map(
             |(stmt, cond)| {
-                if cond.is_none() { Some(stmt) } else { None }
+                if cond.is_none() { Some(*stmt) } else { None }
             },
         )
     }
@@ -306,10 +306,10 @@ ac(2, neg(1)).
         let s1 = Statement::from(1);
         let s2 = Statement::from(2);
 
-        assert!(adf.has_statement(&s1));
-        assert!(adf.has_statement(&s2));
-        assert!(adf.get_condition(&s1).is_some());
-        assert!(adf.get_condition(&s2).is_some());
+        assert!(adf.has_statement(s1));
+        assert!(adf.has_statement(s2));
+        assert!(adf.get_condition(s1).is_some());
+        assert!(adf.get_condition(s2).is_some());
     }
 
     #[test]
@@ -325,8 +325,8 @@ ac(1, c(v)).
         let s1 = Statement::from(1);
         let s2 = Statement::from(2);
 
-        assert!(adf.get_condition(&s1).is_some());
-        assert!(adf.get_condition(&s2).is_none());
+        assert!(adf.get_condition(s1).is_some());
+        assert!(adf.get_condition(s2).is_none());
     }
 
     #[test]
@@ -341,8 +341,8 @@ ac(2, c(v)).
         let s1 = Statement::from(1);
         let s2 = Statement::from(2);
 
-        assert!(adf.get_condition(&s1).is_some());
-        assert!(adf.get_condition(&s2).is_some());
+        assert!(adf.get_condition(s1).is_some());
+        assert!(adf.get_condition(s2).is_some());
     }
 
     #[test]
@@ -373,8 +373,8 @@ s(2).
         let s1 = Statement::from(1);
         let s2 = Statement::from(2);
 
-        assert!(adf.get_condition(&s1).is_some());
-        assert!(adf.get_condition(&s2).is_some());
+        assert!(adf.get_condition(s1).is_some());
+        assert!(adf.get_condition(s2).is_some());
     }
 
     #[test]
@@ -423,7 +423,7 @@ ac(2,and(neg(9),neg(6))).
         // Check that all statements have conditions
         for i in 1..=10 {
             let stmt = Statement::from(i);
-            assert!(adf.get_condition(&stmt).is_some());
+            assert!(adf.get_condition(stmt).is_some());
         }
     }
 
@@ -598,7 +598,7 @@ ac(1, c(v)).
         assert!(result.is_ok());
         let adf = result.unwrap();
         assert_eq!(adf.len(), 1);
-        assert!(adf.get_condition(&Statement::from(1)).is_some());
+        assert!(adf.get_condition(Statement::from(1)).is_some());
     }
 
     #[test]
@@ -623,8 +623,8 @@ ac(3, and(1, 2)).
 
         adf.add_statement(s1);
         assert_eq!(adf.len(), 1);
-        assert!(adf.has_statement(&s1));
-        assert!(adf.get_condition(&s1).is_none());
+        assert!(adf.has_statement(s1));
+        assert!(adf.get_condition(s1).is_none());
     }
 
     #[test]
@@ -646,7 +646,7 @@ ac(3, and(1, 2)).
         adf.add_condition(s1, cond.clone()).unwrap();
         adf.add_statement(s1); // Should not change existing condition
         assert_eq!(adf.len(), 1);
-        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(s1).is_some());
     }
 
     // Tests for add_condition
@@ -659,7 +659,7 @@ ac(3, and(1, 2)).
         let result = adf.add_condition(s1, cond);
         assert!(result.is_ok());
         assert_eq!(adf.len(), 1);
-        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(s1).is_some());
     }
 
     #[test]
@@ -671,7 +671,7 @@ ac(3, and(1, 2)).
         adf.add_statement(s1);
         let result = adf.add_condition(s1, cond);
         assert!(result.is_ok());
-        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(s1).is_some());
     }
 
     #[test]
@@ -700,8 +700,8 @@ ac(3, and(1, 2)).
 
         adf.remove_statement(s1);
         assert_eq!(adf.len(), 1);
-        assert!(!adf.has_statement(&s1));
-        assert!(adf.has_statement(&s2));
+        assert!(!adf.has_statement(s1));
+        assert!(adf.has_statement(s2));
     }
 
     #[test]
@@ -732,11 +732,11 @@ ac(3, and(1, 2)).
         let cond = ConditionExpression::constant(true);
 
         adf.add_condition(s1, cond).unwrap();
-        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(s1).is_some());
 
         adf.remove_condition(s1);
         assert_eq!(adf.len(), 1); // Statement still exists
-        assert!(adf.get_condition(&s1).is_none());
+        assert!(adf.get_condition(s1).is_none());
     }
 
     #[test]
@@ -755,7 +755,7 @@ ac(3, and(1, 2)).
 
         adf.add_statement(s1);
         adf.remove_condition(s1); // Should not panic
-        assert!(adf.get_condition(&s1).is_none());
+        assert!(adf.get_condition(s1).is_none());
     }
 
     // Tests for update_condition
@@ -767,7 +767,7 @@ ac(3, and(1, 2)).
 
         adf.update_condition(s1, cond);
         assert_eq!(adf.len(), 1);
-        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(s1).is_some());
     }
 
     #[test]
@@ -778,7 +778,7 @@ ac(3, and(1, 2)).
 
         adf.add_statement(s1);
         adf.update_condition(s1, cond);
-        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(s1).is_some());
     }
 
     #[test]
@@ -791,7 +791,7 @@ ac(3, and(1, 2)).
         adf.add_condition(s1, cond1).unwrap();
         adf.update_condition(s1, cond2.clone());
 
-        let retrieved = adf.get_condition(&s1).unwrap();
+        let retrieved = adf.get_condition(s1).unwrap();
         assert_eq!(retrieved, &cond2);
     }
 
@@ -824,8 +824,8 @@ ac(3, and(1, 2)).
         adf.add_condition(s3, ConditionExpression::constant(false))
             .unwrap();
 
-        let conds: Vec<_> = adf.conditions().collect();
-        assert_eq!(conds.len(), 2);
+        let conditions: Vec<_> = adf.conditions().collect();
+        assert_eq!(conditions.len(), 2);
     }
 
     // Tests for free_statements iterator
@@ -1040,8 +1040,8 @@ ac(3, and(1, 2)).
 
         adf.fix_missing_statements();
         assert_eq!(adf.len(), 2);
-        assert!(adf.has_statement(&s2));
-        assert!(adf.get_condition(&s2).is_none());
+        assert!(adf.has_statement(s2));
+        assert!(adf.get_condition(s2).is_none());
     }
 
     #[test]
@@ -1069,9 +1069,9 @@ ac(3, and(1, 2)).
         assert_eq!(adf.len(), 4);
 
         // All missing statements should now exist without conditions
-        assert!(adf.get_condition(&s2).is_none());
-        assert!(adf.get_condition(&s3).is_none());
-        assert!(adf.get_condition(&s4).is_none());
+        assert!(adf.get_condition(s2).is_none());
+        assert!(adf.get_condition(s3).is_none());
+        assert!(adf.get_condition(s4).is_none());
     }
 
     #[test]
@@ -1103,7 +1103,7 @@ ac(3, and(1, 2)).
         adf.add_statement(Statement::from(5));
         let stmts: Vec<_> = adf.statements().collect();
         assert_eq!(stmts.len(), 1);
-        assert_eq!(*stmts[0], Statement::from(5));
+        assert_eq!(stmts[0], Statement::from(5));
     }
 
     #[test]
@@ -1113,7 +1113,7 @@ ac(3, and(1, 2)).
         adf.add_statement(Statement::from(1));
         adf.add_statement(Statement::from(2));
 
-        let stmts: Vec<_> = adf.statements().map(|s| *s).collect();
+        let stmts: Vec<_> = adf.statements().collect();
         // Should be sorted (BTreeMap)
         assert_eq!(stmts.len(), 3);
         assert_eq!(stmts[0], Statement::from(1));
@@ -1129,7 +1129,7 @@ ac(3, and(1, 2)).
             .unwrap();
         adf.add_statement(Statement::from(3));
 
-        let stmts: Vec<_> = adf.statements().map(|s| *s).collect();
+        let stmts: Vec<_> = adf.statements().collect();
         assert_eq!(stmts.len(), 3);
         // All statements should be present
         assert!(stmts.contains(&Statement::from(1)));
@@ -1158,14 +1158,14 @@ ac(3, and(1, 2)).
         let mut adf = AdfExpressions::new();
         let s1 = Statement::from(1);
         adf.add_statement(s1);
-        assert!(adf.has_statement(&s1));
+        assert!(adf.has_statement(s1));
     }
 
     #[test]
     fn test_has_statement_does_not_exist() {
         let adf = AdfExpressions::new();
         let s1 = Statement::from(1);
-        assert!(!adf.has_statement(&s1));
+        assert!(!adf.has_statement(s1));
     }
 
     #[test]
@@ -1174,7 +1174,7 @@ ac(3, and(1, 2)).
         let s1 = Statement::from(1);
         adf.add_condition(s1, ConditionExpression::constant(true))
             .unwrap();
-        assert!(adf.has_statement(&s1));
+        assert!(adf.has_statement(s1));
     }
 
     // Tests for parse_and_fix
@@ -1198,14 +1198,14 @@ ac(1, and(2, 3)).
 "#;
         let adf = AdfExpressions::parse_and_fix(input).unwrap();
         assert_eq!(adf.len(), 3);
-        assert!(adf.has_statement(&Statement::from(1)));
-        assert!(adf.has_statement(&Statement::from(2)));
-        assert!(adf.has_statement(&Statement::from(3)));
+        assert!(adf.has_statement(Statement::from(1)));
+        assert!(adf.has_statement(Statement::from(2)));
+        assert!(adf.has_statement(Statement::from(3)));
         // s1 should have a condition
-        assert!(adf.get_condition(&Statement::from(1)).is_some());
+        assert!(adf.get_condition(Statement::from(1)).is_some());
         // s2 and s3 should not have conditions
-        assert!(adf.get_condition(&Statement::from(2)).is_none());
-        assert!(adf.get_condition(&Statement::from(3)).is_none());
+        assert!(adf.get_condition(Statement::from(2)).is_none());
+        assert!(adf.get_condition(Statement::from(3)).is_none());
     }
 
     // Tests for parse_file
@@ -1250,8 +1250,8 @@ ac(1, and(2, 3)).
 
         let adf = AdfExpressions::parse_and_fix_file(temp_file).unwrap();
         assert_eq!(adf.len(), 3);
-        assert!(adf.has_statement(&Statement::from(2)));
-        assert!(adf.has_statement(&Statement::from(3)));
+        assert!(adf.has_statement(Statement::from(2)));
+        assert!(adf.has_statement(Statement::from(3)));
 
         // Clean up
         fs::remove_file(temp_file).unwrap();

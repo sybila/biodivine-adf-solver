@@ -32,12 +32,12 @@ impl DirectMap {
     }
 
     /// Get ordered list of all [`Statement`] objects in the map.
-    pub fn statements(&self) -> Vec<Statement> {
-        self.mapping.keys().copied().collect()
+    pub fn statements(&self) -> impl DoubleEndedIterator<Item = Statement> + '_ {
+        self.mapping.keys().copied()
     }
 
     /// Create a [`Bdd`] literal for the given [`Statement`].    
-    pub fn get_literal(&self, statement: Statement, polarity: bool) -> Bdd {
+    pub fn make_literal(&self, statement: Statement, polarity: bool) -> Bdd {
         let var = self[&statement];
         Bdd::new_literal(var, polarity)
     }
@@ -92,8 +92,8 @@ impl DualMap {
     }
 
     /// Get ordered list of all [`Statement`] objects in the map.
-    pub fn statements(&self) -> Vec<Statement> {
-        self.mapping.keys().copied().collect()
+    pub fn statements(&self) -> impl DoubleEndedIterator<Item = Statement> + '_ {
+        self.mapping.keys().copied()
     }
 
     /// Create [`Bdd`] literals for both the positive and negative dual variables.
@@ -101,19 +101,19 @@ impl DualMap {
     /// Returns a tuple `(positive_literal, negative_literal)` where:
     /// - `positive_literal` is a [`Bdd`] representing the "can be true" variable
     /// - `negative_literal` is a [`Bdd`] representing the "can be false" variable
-    pub fn get_literals(&self, statement: Statement) -> (Bdd, Bdd) {
+    pub fn make_literals(&self, statement: Statement) -> (Bdd, Bdd) {
         let (t_var, f_var) = self[&statement];
         (Bdd::new_literal(t_var, true), Bdd::new_literal(f_var, true))
     }
 
     /// Create a [`Bdd`] literal for the positive dual variable (can be true).
-    pub fn get_positive_literal(&self, statement: Statement) -> Bdd {
+    pub fn make_positive_literal(&self, statement: Statement) -> Bdd {
         let (t_var, _) = self[&statement];
         Bdd::new_literal(t_var, true)
     }
 
     /// Create a [`Bdd`] literal for the negative dual variable (can be false).
-    pub fn get_negative_literal(&self, statement: Statement) -> Bdd {
+    pub fn make_negative_literal(&self, statement: Statement) -> Bdd {
         let (_, f_var) = self[&statement];
         Bdd::new_literal(f_var, true)
     }
@@ -239,7 +239,7 @@ impl AdfBdds {
     /// it will return an error.
     pub fn try_from_expressions(adf: &AdfExpressions) -> Cancellable<Self> {
         // Get all statements in sorted order
-        let statements: Vec<Statement> = adf.statements().copied().collect();
+        let statements: Vec<Statement> = adf.statements().collect();
 
         // Create variable maps
         let direct_map = DirectMap::new(&statements);
@@ -250,7 +250,7 @@ impl AdfBdds {
         for (statement, condition) in adf.conditions() {
             is_cancelled!()?;
             let bdd = expression_to_bdd(condition, &direct_map)?;
-            direct_conditions.insert(*statement, bdd);
+            direct_conditions.insert(statement, bdd);
         }
 
         // Build dual encoding conditions from direct encoding
@@ -267,7 +267,7 @@ impl AdfBdds {
         let mut valid = Bdd::new_true();
         for statement in &statements {
             is_cancelled!()?;
-            let (t_lit, f_lit) = dual_map.get_literals(*statement);
+            let (t_lit, f_lit) = dual_map.make_literals(*statement);
             // At least one must be true: t_var OR f_var
             valid = valid.and(&t_lit.or(&f_lit));
         }
@@ -319,7 +319,7 @@ fn expression_to_bdd(expr: &ConditionExpression, var_map: &DirectMap) -> Cancell
                 Ok(Bdd::new_false())
             }
         }
-        Statement(stmt) => Ok(var_map.get_literal(*stmt, true)),
+        Statement(stmt) => Ok(var_map.make_literal(*stmt, true)),
         Negation(operand) => Ok(expression_to_bdd(operand, var_map)?.not()),
         And(operands) => {
             let mut result = Bdd::new_true();
@@ -365,21 +365,20 @@ fn direct_to_dual_encoding(
     dual_map: &DualMap,
 ) -> Cancellable<Bdd> {
     // Get all statements in the direct map (in reverse order for efficiency)
-    let statements = direct_map.statements();
     let mut result = function.clone();
 
     // Process variables in reverse order for efficiency
-    for statement in statements.iter().rev() {
+    for statement in direct_map.statements().rev() {
         // Check for cancellation at each iteration
         is_cancelled!()?;
 
         let direct_var = direct_map[statement];
-        let (t_lit, f_lit) = dual_map.get_literals(*statement);
+        let (t_lit, f_lit) = dual_map.make_literals(statement);
 
         // (direct_var => t_var) & (!direct_var => f_var)
         // This is equivalent to: (!direct_var | t_var) & (direct_var | f_var)
-        let direct_implies_t = direct_map.get_literal(*statement, false).or(&t_lit);
-        let not_direct_implies_f = direct_map.get_literal(*statement, true).or(&f_lit);
+        let direct_implies_t = direct_map.make_literal(statement, false).or(&t_lit);
+        let not_direct_implies_f = direct_map.make_literal(statement, true).or(&f_lit);
         let mapping_function = direct_implies_t.and(&not_direct_implies_f);
 
         // Apply constraint and existentially quantify the state variable
@@ -399,10 +398,10 @@ mod tests {
         let map = DirectMap::new(&statements);
 
         // Check that all statements are present
-        assert_eq!(map.statements().len(), 3);
-        assert!(map.statements().contains(&Statement::from(0)));
-        assert!(map.statements().contains(&Statement::from(5)));
-        assert!(map.statements().contains(&Statement::from(10)));
+        assert_eq!(map.statements().count(), 3);
+        assert!(map.statements().find(|it| it.into_index() == 0).is_some());
+        assert!(map.statements().find(|it| it.into_index() == 5).is_some());
+        assert!(map.statements().find(|it| it.into_index() == 10).is_some());
     }
 
     #[test]
@@ -451,8 +450,8 @@ mod tests {
         let statements = vec![Statement::from(0)];
         let map = DirectMap::new(&statements);
 
-        let positive = map.get_literal(Statement::from(0), true);
-        let negative = map.get_literal(Statement::from(0), false);
+        let positive = map.make_literal(Statement::from(0), true);
+        let negative = map.make_literal(Statement::from(0), false);
 
         // Both should be valid BDDs (not true or false constants)
         assert!(!positive.is_true());
@@ -470,10 +469,10 @@ mod tests {
         let map = DualMap::new(&statements);
 
         // Check that all statements are present
-        assert_eq!(map.statements().len(), 3);
-        assert!(map.statements().contains(&Statement::from(0)));
-        assert!(map.statements().contains(&Statement::from(5)));
-        assert!(map.statements().contains(&Statement::from(10)));
+        assert_eq!(map.statements().count(), 3);
+        assert!(map.statements().find(|it| it.into_index() == 0).is_some());
+        assert!(map.statements().find(|it| it.into_index() == 5).is_some());
+        assert!(map.statements().find(|it| it.into_index() == 10).is_some());
     }
 
     #[test]
@@ -527,7 +526,7 @@ mod tests {
         let statements = vec![Statement::from(0)];
         let map = DualMap::new(&statements);
 
-        let (t_lit, f_lit) = map.get_literals(Statement::from(0));
+        let (t_lit, f_lit) = map.make_literals(Statement::from(0));
 
         // Both should be valid BDDs (not true or false constants)
         assert!(!t_lit.is_true());
@@ -544,9 +543,9 @@ mod tests {
         let statements = vec![Statement::from(0)];
         let map = DualMap::new(&statements);
 
-        let t_lit = map.get_positive_literal(Statement::from(0));
-        let f_lit = map.get_negative_literal(Statement::from(0));
-        let (t_both, f_both) = map.get_literals(Statement::from(0));
+        let t_lit = map.make_positive_literal(Statement::from(0));
+        let f_lit = map.make_negative_literal(Statement::from(0));
+        let (t_both, f_both) = map.make_literals(Statement::from(0));
 
         // Individual methods should match get_literals
         assert!(t_lit.structural_eq(&t_both));
@@ -581,7 +580,7 @@ mod tests {
         assert!(!stmt_bdd.is_false());
 
         // Should be equivalent to the literal
-        let expected = map.get_literal(Statement::from(0), true);
+        let expected = map.make_literal(Statement::from(0), true);
         assert!(stmt_bdd.structural_eq(&expected));
     }
 
@@ -599,7 +598,7 @@ mod tests {
         assert!(!neg_bdd.is_false());
 
         // Should be equivalent to negated literal
-        let expected = map.get_literal(Statement::from(0), false);
+        let expected = map.make_literal(Statement::from(0), false);
         assert!(neg_bdd.structural_eq(&expected));
     }
 
@@ -729,8 +728,8 @@ mod tests {
         assert!(!bdd.is_false());
 
         // Verify the BDD represents AND correctly by checking its true only when both are true
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
         let expected = s0_lit.and(&s1_lit);
         assert!(bdd.structural_eq(&expected));
     }
@@ -751,8 +750,8 @@ mod tests {
         assert!(!bdd.is_false());
 
         // Verify the BDD represents OR correctly
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
         let expected = s0_lit.or(&s1_lit);
         assert!(bdd.structural_eq(&expected));
     }
@@ -773,8 +772,8 @@ mod tests {
         assert!(!bdd.is_false());
 
         // Implication: (s0 -> s1) is equivalent to (!s0 | s1)
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
         let expected = s0_lit.not().or(&s1_lit);
         assert!(bdd.structural_eq(&expected));
     }
@@ -795,8 +794,8 @@ mod tests {
         assert!(!bdd.is_false());
 
         // Verify the BDD represents equivalence correctly
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
         let expected = s0_lit.iff(&s1_lit);
         assert!(bdd.structural_eq(&expected));
     }
@@ -817,8 +816,8 @@ mod tests {
         assert!(!bdd.is_false());
 
         // Verify the BDD represents XOR correctly
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
         let expected = s0_lit.xor(&s1_lit);
         assert!(bdd.structural_eq(&expected));
     }
@@ -843,9 +842,9 @@ mod tests {
         assert!(!bdd.is_false());
 
         // Build the same BDD manually to verify
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
-        let s2_lit = map.get_literal(Statement::from(2), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
+        let s2_lit = map.make_literal(Statement::from(2), true);
         let expected = s0_lit.and(&s1_lit).or(&s2_lit);
         assert!(bdd.structural_eq(&expected));
     }
@@ -870,10 +869,10 @@ mod tests {
         let bdd = expression_to_bdd(&expr, &map).unwrap();
 
         // Build the same BDD manually
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
-        let s2_lit = map.get_literal(Statement::from(2), true);
-        let s3_lit = map.get_literal(Statement::from(3), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
+        let s2_lit = map.make_literal(Statement::from(2), true);
+        let s3_lit = map.make_literal(Statement::from(3), true);
         let expected = s0_lit.and(&s1_lit).and(&s2_lit).and(&s3_lit);
         assert!(bdd.structural_eq(&expected));
     }
@@ -898,10 +897,10 @@ mod tests {
         let bdd = expression_to_bdd(&expr, &map).unwrap();
 
         // Build the same BDD manually
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
-        let s2_lit = map.get_literal(Statement::from(2), true);
-        let s3_lit = map.get_literal(Statement::from(3), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
+        let s2_lit = map.make_literal(Statement::from(2), true);
+        let s3_lit = map.make_literal(Statement::from(3), true);
         let expected = s0_lit.or(&s1_lit).or(&s2_lit).or(&s3_lit);
         assert!(bdd.structural_eq(&expected));
     }
@@ -926,9 +925,9 @@ mod tests {
         assert!(!bdd.is_false());
 
         // Build the same BDD manually to verify
-        let s0_lit = map.get_literal(Statement::from(0), true);
-        let s1_lit = map.get_literal(Statement::from(1), true);
-        let s2_lit = map.get_literal(Statement::from(2), true);
+        let s0_lit = map.make_literal(Statement::from(0), true);
+        let s1_lit = map.make_literal(Statement::from(1), true);
+        let s2_lit = map.make_literal(Statement::from(2), true);
         let xor_part = s1_lit.xor(&s2_lit);
         let implication = s0_lit.not().or(&xor_part);
         let expected = implication.not();
@@ -971,7 +970,7 @@ mod tests {
         let var_map = dual.var_map();
 
         // For a single statement, valid should be: t_var OR f_var
-        let (t_lit, f_lit) = var_map.get_literals(Statement::from(0));
+        let (t_lit, f_lit) = var_map.make_literals(Statement::from(0));
         let expected = t_lit.or(&f_lit);
 
         assert!(valid.structural_eq(&expected));
@@ -995,9 +994,9 @@ mod tests {
         let var_map = dual.var_map();
 
         // For multiple statements, valid should be the conjunction of all (t_i OR f_i)
-        let (t0_lit, f0_lit) = var_map.get_literals(Statement::from(0));
-        let (t1_lit, f1_lit) = var_map.get_literals(Statement::from(1));
-        let (t2_lit, f2_lit) = var_map.get_literals(Statement::from(2));
+        let (t0_lit, f0_lit) = var_map.make_literals(Statement::from(0));
+        let (t1_lit, f1_lit) = var_map.make_literals(Statement::from(1));
+        let (t2_lit, f2_lit) = var_map.make_literals(Statement::from(2));
 
         let expected = t0_lit
             .or(&f0_lit)
@@ -1022,7 +1021,7 @@ mod tests {
         let var_map = dual.var_map();
 
         // Get the dual variables
-        let (t_lit, f_lit) = var_map.get_literals(Statement::from(0));
+        let (t_lit, f_lit) = var_map.make_literals(Statement::from(0));
 
         // The invalid case: both t_var and f_var are false
         let both_false = t_lit.not().and(&f_lit.not());
@@ -1047,7 +1046,7 @@ mod tests {
         let var_map = dual.var_map();
 
         // Get the dual variables
-        let (t_lit, f_lit) = var_map.get_literals(Statement::from(0));
+        let (t_lit, f_lit) = var_map.make_literals(Statement::from(0));
 
         // Test all three valid cases:
         // 1. Both true (statement can be both true and false - truly "free")
@@ -1082,8 +1081,8 @@ mod tests {
         let var_map = dual.var_map();
 
         // Valid should constrain both statement 0 and statement 1 (including free statements)
-        let (t0_lit, f0_lit) = var_map.get_literals(Statement::from(0));
-        let (t1_lit, f1_lit) = var_map.get_literals(Statement::from(1));
+        let (t0_lit, f0_lit) = var_map.make_literals(Statement::from(0));
+        let (t1_lit, f1_lit) = var_map.make_literals(Statement::from(1));
 
         let expected = t0_lit.or(&f0_lit).and(&t1_lit.or(&f1_lit));
 
@@ -1117,7 +1116,7 @@ mod tests {
         // Build the expected valid BDD manually
         let mut expected = Bdd::new_true();
         for i in 0..4 {
-            let (t_lit, f_lit) = var_map.get_literals(Statement::from(i));
+            let (t_lit, f_lit) = var_map.make_literals(Statement::from(i));
             expected = expected.and(&t_lit.or(&f_lit));
         }
 
