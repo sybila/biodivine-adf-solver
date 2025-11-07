@@ -171,7 +171,8 @@ impl DirectEncoding {
 /// These are considered to be "free" statements.
 ///
 /// Also note that for many applications, it is sufficient to encode "free" statements using
-/// direct encoding. However, strictly speaking, this is not
+/// direct encoding. However, strictly speaking, this is not always sufficient if we want to
+/// find solutions where a free statement is, well, free and other statements are fixed.
 pub struct DualEncoding {
     var_map: DualMap,
     conditions: BTreeMap<Statement, (Bdd, Bdd)>,
@@ -198,6 +199,9 @@ impl DualEncoding {
 ///
 /// Internally, it uses two encodings, depending on use case. Direct encoding uses one [`Bdd`]
 /// variable per statement, while dual encoding uses two.
+///
+/// By default, the variables are ordered such that the direct variable is followed by the
+/// two dual variables.
 pub struct AdfBdds {
     direct_encoding: DirectEncoding,
     dual_encoding: DualEncoding,
@@ -260,7 +264,7 @@ impl From<&AdfExpressions> for AdfBdds {
     fn from(adf: &AdfExpressions) -> Self {
         // Use the cancellable version, but panic if cancelled
         AdfBdds::try_from_expressions(adf)
-            .expect("Conversion from ExpressionAdf to SymbolicAdf was cancelled")
+            .expect("Conversion from `AdfExpressions` to `AdfBdds` was cancelled")
     }
 }
 
@@ -668,7 +672,7 @@ mod tests {
         "#;
 
         let expr_adf = AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
-        // Test the From implementation which takes ownership
+        // Test the `From` implementation which takes ownership
         let symbolic_adf = AdfBdds::from(expr_adf);
 
         // Verify that the conversion worked correctly
@@ -698,7 +702,7 @@ mod tests {
         assert!(!bdd.is_true());
         assert!(!bdd.is_false());
 
-        // Verify the BDD represents AND correctly by checking it's true only when both are true
+        // Verify the BDD represents AND correctly by checking its true only when both are true
         let s0_lit = map.get_literal(Statement::from(0), true);
         let s1_lit = map.get_literal(Statement::from(1), true);
         let expected = s0_lit.and(&s1_lit);
