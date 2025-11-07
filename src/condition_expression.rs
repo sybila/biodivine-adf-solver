@@ -190,6 +190,14 @@ impl ConditionExpression {
     }
 }
 
+impl TryFrom<&str> for ConditionExpression {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
 impl fmt::Display for ConditionExpression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", crate::condition_expression_writer::write(self))
@@ -357,6 +365,10 @@ mod tests {
         assert!(cond.as_implication().is_none());
         assert!(cond.as_equivalence().is_none());
         assert!(cond.as_exclusive_or().is_none());
+
+        // Test as_constant returning None on non-constant
+        let stmt_cond = ConditionExpression::statement(Statement::from(1));
+        assert!(stmt_cond.as_constant().is_none());
     }
 
     // Display trait tests
@@ -415,5 +427,34 @@ mod tests {
 
         assert_eq!(displayed, original);
         assert_eq!(format!("{}", reparsed), original);
+    }
+
+    // TryFrom tests
+
+    #[test]
+    fn test_try_from_valid_expression() {
+        use std::convert::TryFrom;
+
+        let expr = ConditionExpression::try_from("and(1,2)").unwrap();
+        assert!(expr.is_and());
+        assert_eq!(expr.as_and().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_try_from_invalid_expression() {
+        use std::convert::TryFrom;
+
+        let result = ConditionExpression::try_from("invalid(1,2)");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_from_roundtrip() {
+        use std::convert::TryFrom;
+
+        let input = "or(neg(1),7)";
+        let expr = ConditionExpression::try_from(input).unwrap();
+        let output = format!("{}", expr);
+        assert_eq!(input, output);
     }
 }
