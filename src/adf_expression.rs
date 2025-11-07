@@ -499,6 +499,32 @@ ac(2,and(neg(9),neg(6))).
     }
 
     #[test]
+    fn test_parse_missing_comma_in_ac() {
+        // Test the error condition when ac() line is missing comma
+        let input = "ac(1 c(v)).";
+        let result = ExpressionAdf::parse(input);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Missing comma in acceptance condition"));
+        assert!(err.contains("Line 1"));
+    }
+
+    #[test]
+    fn test_parse_missing_comma_in_ac_multiline() {
+        let input = r#"
+s(1).
+s(2).
+ac(1, c(v)).
+ac(2 neg(1)).
+"#;
+        let result = ExpressionAdf::parse(input);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Missing comma in acceptance condition"));
+        assert!(err.contains("Line 5")); // Should be line 5
+    }
+
+    #[test]
     fn test_parse_duplicate_condition_simple() {
         let input = r#"
 s(1).
@@ -1063,6 +1089,68 @@ ac(3, and(1, 2)).
 
         adf.fix_missing_statements();
         assert_eq!(adf.len(), len_after_first);
+    }
+
+    // Tests for statements iterator
+    #[test]
+    fn test_statements_empty() {
+        let adf = ExpressionAdf::new();
+        assert_eq!(adf.statements().count(), 0);
+    }
+
+    #[test]
+    fn test_statements_single() {
+        let mut adf = ExpressionAdf::new();
+        adf.add_statement(Statement::from(5));
+        let stmts: Vec<_> = adf.statements().collect();
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(*stmts[0], Statement::from(5));
+    }
+
+    #[test]
+    fn test_statements_multiple() {
+        let mut adf = ExpressionAdf::new();
+        adf.add_statement(Statement::from(3));
+        adf.add_statement(Statement::from(1));
+        adf.add_statement(Statement::from(2));
+
+        let stmts: Vec<_> = adf.statements().map(|s| *s).collect();
+        // Should be sorted (BTreeMap)
+        assert_eq!(stmts.len(), 3);
+        assert_eq!(stmts[0], Statement::from(1));
+        assert_eq!(stmts[1], Statement::from(2));
+        assert_eq!(stmts[2], Statement::from(3));
+    }
+
+    #[test]
+    fn test_statements_with_and_without_conditions() {
+        let mut adf = ExpressionAdf::new();
+        adf.add_statement(Statement::from(1));
+        adf.add_condition(Statement::from(2), ConditionExpression::constant(true))
+            .unwrap();
+        adf.add_statement(Statement::from(3));
+
+        let stmts: Vec<_> = adf.statements().map(|s| *s).collect();
+        assert_eq!(stmts.len(), 3);
+        // All statements should be present
+        assert!(stmts.contains(&Statement::from(1)));
+        assert!(stmts.contains(&Statement::from(2)));
+        assert!(stmts.contains(&Statement::from(3)));
+    }
+
+    // Tests for Default implementation
+    #[test]
+    fn test_default_creates_empty_adf() {
+        let adf = ExpressionAdf::default();
+        assert!(adf.is_empty());
+        assert_eq!(adf.len(), 0);
+    }
+
+    #[test]
+    fn test_default_equivalent_to_new() {
+        let adf1 = ExpressionAdf::new();
+        let adf2 = ExpressionAdf::default();
+        assert_eq!(adf1, adf2);
     }
 
     // Tests for has_statement
