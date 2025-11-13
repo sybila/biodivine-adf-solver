@@ -491,7 +491,7 @@ mod tests {
         let result: Vec<_> = map.statements().cloned().collect();
         assert_eq!(
             result,
-            vec![Statement::from(0), Statement::from(5), Statement::from(10)]
+            vec![Statement::from(0), Statement::from(10), Statement::from(5)]
         );
     }
 
@@ -509,7 +509,7 @@ mod tests {
         let var0 = map.get(&Statement::from(0)).unwrap();
         let var5 = map.get(&Statement::from(5)).unwrap();
         assert_eq!(u64::from(var0), 0 << 2);
-        assert_eq!(u64::from(var5), 5 << 2);
+        assert_eq!(u64::from(var5), 1 << 2);
     }
 
     #[test]
@@ -563,7 +563,7 @@ mod tests {
         let result: Vec<_> = map.statements().cloned().collect();
         assert_eq!(
             result,
-            vec![Statement::from(0), Statement::from(5), Statement::from(10)]
+            vec![Statement::from(0), Statement::from(10), Statement::from(5)]
         );
     }
 
@@ -583,8 +583,8 @@ mod tests {
 
         assert_eq!(u64::from(t0), (0 << 2) + 1);
         assert_eq!(u64::from(f0), (0 << 2) + 2);
-        assert_eq!(u64::from(t5), (5 << 2) + 1);
-        assert_eq!(u64::from(f5), (5 << 2) + 2);
+        assert_eq!(u64::from(t5), (1 << 2) + 1);
+        assert_eq!(u64::from(f5), (1 << 2) + 2);
     }
 
     #[test]

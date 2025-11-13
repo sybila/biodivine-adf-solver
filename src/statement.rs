@@ -1,5 +1,5 @@
-/// An integer identifier of an ADF statement.
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug, Hash)]
+/// An identifier of an ADF statement. Can be a numeric ID or an arbitrary string label.
+#[derive(Clone, PartialEq, PartialOrd, Eq, Ord, Debug, Hash)]
 pub struct Statement(String);
 
 impl Statement {
@@ -11,6 +11,18 @@ impl Statement {
 
 impl From<usize> for Statement {
     fn from(value: usize) -> Self {
+        Statement(value.to_string())
+    }
+}
+
+impl From<String> for Statement {
+    fn from(value: String) -> Self {
+        Statement(value)
+    }
+}
+
+impl From<&str> for Statement {
+    fn from(value: &str) -> Self {
         Statement(value.to_string())
     }
 }

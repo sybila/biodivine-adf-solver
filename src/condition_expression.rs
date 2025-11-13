@@ -176,7 +176,7 @@ impl ConditionExpression {
     /// Parse a condition expression from a string.
     ///
     /// Supports the following syntax:
-    /// - `42` - Statement reference
+    /// - `42` or `foo` - Statement reference (numeric or string label)
     /// - `c(v)` - Constant true (verum)
     /// - `c(f)` - Constant false (falsum)
     /// - `neg(expr)` - Negation

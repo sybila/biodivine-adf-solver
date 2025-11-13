@@ -49,9 +49,10 @@ impl AdfExpressions {
     /// Parse an ADF from a string in the `.adf` file format.
     ///
     /// The format consists of lines with:
-    /// - `s(number).` to declare a statement
-    /// - `ac(number, expression).` to declare an acceptance condition
+    /// - `s(label).` or `statement(label).` to declare a statement
+    /// - `ac(label, expression).` to declare an acceptance condition
     ///
+    /// Labels can be numeric (e.g., `1`, `42`) or string identifiers (e.g., `foo`, `bar`).
     /// Empty lines and lines starting with `#` are ignored as comments.
     /// Statements can be declared without conditions, and conditions can reference
     /// statements that are not explicitly declared.
@@ -66,26 +67,30 @@ impl AdfExpressions {
                 continue;
             }
 
-            // Parse statement declaration: s(number).
-            if line.starts_with("s(") && line.ends_with(").") {
-                let number_str = &line[2..line.len() - 2];
-                let number = number_str.parse::<usize>().map_err(|_| {
-                    format!(
-                        "Line {}: Invalid statement number: {}",
-                        line_num + 1,
-                        number_str
-                    )
-                })?;
-                let statement = Statement::from(number);
+            // Parse statement declaration: s(label). or statement(label).
+            let is_short_form = line.starts_with("s(") && line.ends_with(").");
+            let is_long_form = line.starts_with("statement(") && line.ends_with(").");
+
+            if is_short_form || is_long_form {
+                let label_str = if is_short_form {
+                    &line[2..line.len() - 2]
+                } else {
+                    &line[10..line.len() - 2]
+                };
+
+                let label_str = label_str.trim();
+
+                // Try to parse as number first, otherwise use as string label
+                let statement = Statement::from(label_str);
 
                 // Insert statement with no condition if not already present
                 adf.conditions.entry(statement).or_insert(None);
                 continue;
             }
 
-            // Parse acceptance condition: ac(number, expression).
+            // Parse acceptance condition: ac(label, expression).
             if line.starts_with("ac(") && line.ends_with(").") {
-                // Find the comma that separates the statement number from the expression
+                // Find the comma that separates the statement label from the expression
                 let content = &line[3..line.len() - 2];
                 let comma_pos = content.find(',').ok_or_else(|| {
                     format!(
@@ -94,17 +99,11 @@ impl AdfExpressions {
                     )
                 })?;
 
-                let number_str = content[..comma_pos].trim();
+                let label_str = content[..comma_pos].trim();
                 let expr_str = content[comma_pos + 1..].trim();
 
-                let number = number_str.parse::<usize>().map_err(|_| {
-                    format!(
-                        "Line {}: Invalid statement number: {}",
-                        line_num + 1,
-                        number_str
-                    )
-                })?;
-                let statement = Statement::from(number);
+                // Try to parse as number first, otherwise use as string label
+                let statement = Statement::from(label_str);
 
                 // Parse the condition expression
                 let condition = ConditionExpression::parse(expr_str).map_err(|e| {
@@ -120,7 +119,7 @@ impl AdfExpressions {
                     return Err(format!(
                         "Line {}: Statement {} already has a condition declared",
                         line_num + 1,
-                        number
+                        statement
                     ));
                 }
 
@@ -482,20 +481,28 @@ ac(2,and(neg(9),neg(6))).
     }
 
     #[test]
-    fn test_parse_invalid_statement_number() {
+    fn test_parse_statement_string_label() {
+        // String labels are now valid
         let input = "s(abc).";
-        assert!(AdfExpressions::parse(input).is_err());
+        let adf = AdfExpressions::parse(input).unwrap();
+        assert_eq!(adf.len(), 1);
+        assert!(adf.has_statement(&Statement::from("abc")));
     }
 
     #[test]
-    fn test_parse_invalid_condition_number() {
+    fn test_parse_condition_string_label() {
+        // String labels are now valid in conditions
         let input = "ac(xyz, c(v)).";
-        assert!(AdfExpressions::parse(input).is_err());
+        let adf = AdfExpressions::parse(input).unwrap();
+        assert_eq!(adf.len(), 1);
+        assert!(adf.has_statement(&Statement::from("xyz")));
     }
 
     #[test]
     fn test_parse_invalid_expression() {
-        let input = "ac(1, invalid_expr).";
+        // Unknown identifiers are now treated as statement labels, not invalid
+        // Let's test an actually invalid expression syntax instead
+        let input = "ac(1, and(,)).";
         assert!(AdfExpressions::parse(input).is_err());
     }
 
@@ -1426,6 +1433,107 @@ ac(2,and(neg(9),neg(6))).
         fs::remove_file(temp_file).unwrap();
     }
 
+    // Tests for statement(X) syntax
+    #[test]
+    fn test_parse_statement_long_form() {
+        let input = r#"
+statement(1).
+statement(2).
+ac(1, c(v)).
+ac(2, neg(1)).
+"#;
+        let adf = AdfExpressions::parse(input).unwrap();
+        assert_eq!(adf.len(), 2);
+
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        assert!(adf.has_statement(&s1));
+        assert!(adf.has_statement(&s2));
+        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(&s2).is_some());
+    }
+
+    #[test]
+    fn test_parse_statement_mixed_forms() {
+        let input = r#"
+s(1).
+statement(2).
+ac(1, c(v)).
+ac(2, neg(1)).
+"#;
+        let adf = AdfExpressions::parse(input).unwrap();
+        assert_eq!(adf.len(), 2);
+
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        assert!(adf.has_statement(&s1));
+        assert!(adf.has_statement(&s2));
+        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(&s2).is_some());
+    }
+
+    #[test]
+    fn test_parse_string_labels() {
+        let input = r#"
+s(foo).
+s(bar).
+ac(foo, c(v)).
+ac(bar, neg(foo)).
+"#;
+        let adf = AdfExpressions::parse(input).unwrap();
+        assert_eq!(adf.len(), 2);
+
+        let s_foo = Statement::from("foo");
+        let s_bar = Statement::from("bar");
+
+        assert!(adf.has_statement(&s_foo));
+        assert!(adf.has_statement(&s_bar));
+        assert!(adf.get_condition(&s_foo).is_some());
+        assert!(adf.get_condition(&s_bar).is_some());
+    }
+
+    #[test]
+    fn test_parse_string_labels_long_form() {
+        let input = r#"
+statement(alice).
+statement(bob).
+ac(alice, c(v)).
+ac(bob, neg(alice)).
+"#;
+        let adf = AdfExpressions::parse(input).unwrap();
+        assert_eq!(adf.len(), 2);
+
+        let s_alice = Statement::from("alice");
+        let s_bob = Statement::from("bob");
+
+        assert!(adf.has_statement(&s_alice));
+        assert!(adf.has_statement(&s_bob));
+        assert!(adf.get_condition(&s_alice).is_some());
+        assert!(adf.get_condition(&s_bob).is_some());
+    }
+
+    #[test]
+    fn test_parse_mixed_numeric_and_string_labels() {
+        let input = r#"
+s(1).
+s(foo).
+ac(1, foo).
+ac(foo, neg(1)).
+"#;
+        let adf = AdfExpressions::parse(input).unwrap();
+        assert_eq!(adf.len(), 2);
+
+        let s1 = Statement::from(1);
+        let s_foo = Statement::from("foo");
+
+        assert!(adf.has_statement(&s1));
+        assert!(adf.has_statement(&s_foo));
+        assert!(adf.get_condition(&s1).is_some());
+        assert!(adf.get_condition(&s_foo).is_some());
+    }
+
     // Comprehensive test: parse and write all test instances
     #[test]
     fn test_parse_write_all_test_instances() {
@@ -1469,15 +1577,23 @@ ac(2,and(neg(9),neg(6))).
                                 }
 
                                 // Compare line sets (order may differ)
-                                let original_lines: HashSet<&str> = original_content
+                                let original_lines: HashSet<String> = original_content
                                     .lines()
                                     .map(|l| l.trim())
+                                    .map(|l| {
+                                        // If the line is a "long" statement declaration, shorten it.
+                                        if l.starts_with("statement") {
+                                            l.replace("statement", "s")
+                                        } else {
+                                            l.to_string()
+                                        }
+                                    })
                                     .filter(|l| !l.is_empty() && !l.starts_with('#'))
                                     .collect();
 
-                                let written_lines: HashSet<&str> = written_content
+                                let written_lines: HashSet<String> = written_content
                                     .lines()
-                                    .map(|l| l.trim())
+                                    .map(|l| l.trim().to_string())
                                     .filter(|l| !l.is_empty())
                                     .collect();
 
