@@ -2,3 +2,4 @@ reviews:
   path_filters:
     - "!run.py"
     - "!test_instances"
+    - "!benchmarks"
