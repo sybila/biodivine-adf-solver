@@ -224,6 +224,181 @@ impl ConditionExpression {
         }
         // Constants don't contain statements
     }
+
+    /// Substitute all occurrences of a statement with a condition expression.
+    ///
+    /// This method recursively traverses the expression tree and replaces every
+    /// occurrence of the given statement with the provided replacement expression.
+    ///
+    /// # Arguments
+    ///
+    /// * `statement` - The statement to replace
+    /// * `replacement` - The expression to substitute in place of the statement
+    ///
+    /// # Returns
+    ///
+    /// A new expression with all occurrences of `statement` replaced by `replacement`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{ConditionExpression, Statement};
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    /// let expr = ConditionExpression::and(&[
+    ///     ConditionExpression::statement(s1.clone()),
+    ///     ConditionExpression::statement(s2.clone()),
+    /// ]);
+    ///
+    /// let replacement = ConditionExpression::negation(
+    ///     ConditionExpression::statement(Statement::from(3))
+    /// );
+    /// let result = expr.substitute(&s1, &replacement);
+    ///
+    /// // Result should be: and(neg(3), 2)
+    /// assert_eq!(result.to_string(), "and(neg(3),2)");
+    /// ```
+    pub fn substitute(&self, statement: &Statement, replacement: &ConditionExpression) -> Self {
+        match &*self.0 {
+            ConditionExpressionNode::Constant(_) => self.clone(),
+            ConditionExpressionNode::Statement(stmt) => {
+                if stmt == statement {
+                    replacement.clone()
+                } else {
+                    self.clone()
+                }
+            }
+            ConditionExpressionNode::Negation(operand) => {
+                ConditionExpression::negation(operand.substitute(statement, replacement))
+            }
+            ConditionExpressionNode::And(operands) => {
+                let new_operands: Vec<_> = operands
+                    .iter()
+                    .map(|op| op.substitute(statement, replacement))
+                    .collect();
+                ConditionExpression::and(&new_operands)
+            }
+            ConditionExpressionNode::Or(operands) => {
+                let new_operands: Vec<_> = operands
+                    .iter()
+                    .map(|op| op.substitute(statement, replacement))
+                    .collect();
+                ConditionExpression::or(&new_operands)
+            }
+            ConditionExpressionNode::Implication(left, right) => ConditionExpression::implication(
+                left.substitute(statement, replacement),
+                right.substitute(statement, replacement),
+            ),
+            ConditionExpressionNode::Equivalence(left, right) => ConditionExpression::equivalence(
+                left.substitute(statement, replacement),
+                right.substitute(statement, replacement),
+            ),
+            ConditionExpressionNode::ExclusiveOr(left, right) => ConditionExpression::exclusive_or(
+                left.substitute(statement, replacement),
+                right.substitute(statement, replacement),
+            ),
+        }
+    }
+
+    /// Convert all n-ary AND and OR operators into binary operators.
+    ///
+    /// This method recursively transforms the expression tree so that all AND and OR
+    /// operations have exactly two operands. N-ary operations are converted to
+    /// left-associative binary operations:
+    /// - `and(a, b, c)` becomes `and(and(a, b), c)`
+    /// - `or(a, b, c, d)` becomes `or(or(or(a, b), c), d)`
+    ///
+    /// Operations with 0 or 1 operands are handled as follows:
+    /// - `and()` becomes `c(v)` (true)
+    /// - `and(a)` becomes `a`
+    /// - `or()` becomes `c(f)` (false)
+    /// - `or(a)` becomes `a`
+    ///
+    /// Other operators (negation, implication, equivalence, xor) are recursively processed
+    /// but remain unchanged in their structure.
+    ///
+    /// # Returns
+    ///
+    /// A new expression with all AND/OR operators converted to binary form.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{ConditionExpression, Statement};
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    /// let s3 = Statement::from(3);
+    ///
+    /// // Create: and(1, 2, 3)
+    /// let expr = ConditionExpression::and(&[
+    ///     ConditionExpression::statement(s1),
+    ///     ConditionExpression::statement(s2),
+    ///     ConditionExpression::statement(s3),
+    /// ]);
+    ///
+    /// let binarized = expr.binarize();
+    ///
+    /// // Result: and(and(1, 2), 3)
+    /// assert_eq!(binarized.to_string(), "and(and(1,2),3)");
+    /// ```
+    pub fn binarize(&self) -> Self {
+        match &*self.0 {
+            ConditionExpressionNode::Constant(_) => self.clone(),
+            ConditionExpressionNode::Statement(_) => self.clone(),
+            ConditionExpressionNode::Negation(operand) => {
+                ConditionExpression::negation(operand.binarize())
+            }
+            ConditionExpressionNode::And(operands) => {
+                // Recursively binarize all operands first
+                let binarized_operands: Vec<_> = operands.iter().map(|op| op.binarize()).collect();
+
+                match binarized_operands.len() {
+                    0 => ConditionExpression::constant(true), // Empty AND is true
+                    1 => binarized_operands[0].clone(), // Single operand AND is the operand itself
+                    _ => {
+                        // Convert to left-associative binary: and(and(a, b), c)
+                        let mut result = ConditionExpression::and(&[
+                            binarized_operands[0].clone(),
+                            binarized_operands[1].clone(),
+                        ]);
+                        for operand in &binarized_operands[2..] {
+                            result = ConditionExpression::and(&[result, operand.clone()]);
+                        }
+                        result
+                    }
+                }
+            }
+            ConditionExpressionNode::Or(operands) => {
+                // Recursively binarize all operands first
+                let binarized_operands: Vec<_> = operands.iter().map(|op| op.binarize()).collect();
+
+                match binarized_operands.len() {
+                    0 => ConditionExpression::constant(false), // Empty OR is false
+                    1 => binarized_operands[0].clone(), // Single operand OR is the operand itself
+                    _ => {
+                        // Convert to left-associative binary: or(or(a, b), c)
+                        let mut result = ConditionExpression::or(&[
+                            binarized_operands[0].clone(),
+                            binarized_operands[1].clone(),
+                        ]);
+                        for operand in &binarized_operands[2..] {
+                            result = ConditionExpression::or(&[result, operand.clone()]);
+                        }
+                        result
+                    }
+                }
+            }
+            ConditionExpressionNode::Implication(left, right) => {
+                ConditionExpression::implication(left.binarize(), right.binarize())
+            }
+            ConditionExpressionNode::Equivalence(left, right) => {
+                ConditionExpression::equivalence(left.binarize(), right.binarize())
+            }
+            ConditionExpressionNode::ExclusiveOr(left, right) => {
+                ConditionExpression::exclusive_or(left.binarize(), right.binarize())
+            }
+        }
+    }
 }
 
 impl TryFrom<&str> for ConditionExpression {
@@ -628,5 +803,550 @@ mod tests {
         assert_eq!(stmts[0], s1);
         assert_eq!(stmts[1], s2);
         assert_eq!(stmts[2], s3);
+    }
+
+    // Tests for substitute
+
+    #[test]
+    fn test_substitute_constant_unchanged() {
+        let expr = ConditionExpression::constant(true);
+        let s1 = Statement::from(1);
+        let replacement = ConditionExpression::constant(false);
+
+        let result = expr.substitute(&s1, &replacement);
+        assert_eq!(result, expr);
+        assert!(result.is_constant());
+        assert_eq!(result.as_constant(), Some(true));
+    }
+
+    #[test]
+    fn test_substitute_statement_match() {
+        let s1 = Statement::from(1);
+        let expr = ConditionExpression::statement(s1.clone());
+        let replacement = ConditionExpression::constant(true);
+
+        let result = expr.substitute(&s1, &replacement);
+        assert_eq!(result, replacement);
+        assert!(result.is_constant());
+    }
+
+    #[test]
+    fn test_substitute_statement_no_match() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let expr = ConditionExpression::statement(s1.clone());
+        let replacement = ConditionExpression::constant(true);
+
+        let result = expr.substitute(&s2, &replacement);
+        assert_eq!(result, expr);
+        assert!(result.is_statement());
+        assert_eq!(result.as_statement(), Some(&s1));
+    }
+
+    #[test]
+    fn test_substitute_negation() {
+        let s1 = Statement::from(1);
+        let expr = ConditionExpression::negation(ConditionExpression::statement(s1.clone()));
+        let replacement = ConditionExpression::constant(true);
+
+        let result = expr.substitute(&s1, &replacement);
+        assert!(result.is_negation());
+        let inner = result.as_negation().unwrap();
+        assert!(inner.is_constant());
+        assert_eq!(inner.as_constant(), Some(true));
+    }
+
+    #[test]
+    fn test_substitute_and_simple() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s2.clone()),
+        ]);
+        let replacement = ConditionExpression::constant(false);
+
+        let result = expr.substitute(&s1, &replacement);
+        assert!(result.is_and());
+        let operands = result.as_and().unwrap();
+        assert_eq!(operands.len(), 2);
+        assert!(operands[0].is_constant());
+        assert!(operands[1].is_statement());
+        assert_eq!(operands[1].as_statement(), Some(&s2));
+    }
+
+    #[test]
+    fn test_substitute_or_multiple_occurrences() {
+        let s1 = Statement::from(1);
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s1.clone()),
+        ]);
+        let replacement = ConditionExpression::constant(true);
+
+        let result = expr.substitute(&s1, &replacement);
+        assert!(result.is_or());
+        let operands = result.as_or().unwrap();
+        assert_eq!(operands.len(), 2);
+        assert!(operands[0].is_constant());
+        assert!(operands[1].is_constant());
+    }
+
+    #[test]
+    fn test_substitute_implication() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let expr = ConditionExpression::implication(
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s2.clone()),
+        );
+        let replacement =
+            ConditionExpression::negation(ConditionExpression::statement(Statement::from(3)));
+
+        let result = expr.substitute(&s1, &replacement);
+        assert!(result.is_implication());
+        let (left, right) = result.as_implication().unwrap();
+        assert!(left.is_negation());
+        assert!(right.is_statement());
+        assert_eq!(right.as_statement(), Some(&s2));
+    }
+
+    #[test]
+    fn test_substitute_equivalence() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let expr = ConditionExpression::equivalence(
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s2.clone()),
+        );
+        let replacement = ConditionExpression::constant(true);
+
+        let result = expr.substitute(&s2, &replacement);
+        assert!(result.is_equivalence());
+        let (left, right) = result.as_equivalence().unwrap();
+        assert!(left.is_statement());
+        assert!(right.is_constant());
+    }
+
+    #[test]
+    fn test_substitute_xor() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let expr = ConditionExpression::exclusive_or(
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s2.clone()),
+        );
+        let replacement = ConditionExpression::constant(false);
+
+        let result = expr.substitute(&s1, &replacement);
+        assert!(result.is_exclusive_or());
+        let (left, right) = result.as_exclusive_or().unwrap();
+        assert!(left.is_constant());
+        assert!(right.is_statement());
+    }
+
+    #[test]
+    fn test_substitute_nested_complex() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // Create: and(or(1, 2), neg(1))
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::or(&[
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(s2.clone()),
+            ]),
+            ConditionExpression::negation(ConditionExpression::statement(s1.clone())),
+        ]);
+
+        let replacement = ConditionExpression::statement(s3.clone());
+        let result = expr.substitute(&s1, &replacement);
+
+        // Result should be: and(or(3, 2), neg(3))
+        assert_eq!(result.to_string(), "and(or(3,2),neg(3))");
+    }
+
+    #[test]
+    fn test_substitute_with_complex_replacement() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s2.clone()),
+        ]);
+
+        // Replace s1 with "or(s2, s3)"
+        let replacement = ConditionExpression::or(&[
+            ConditionExpression::statement(s2.clone()),
+            ConditionExpression::statement(s3.clone()),
+        ]);
+
+        let result = expr.substitute(&s1, &replacement);
+
+        // Result should be: and(or(2, 3), 2)
+        assert_eq!(result.to_string(), "and(or(2,3),2)");
+    }
+
+    #[test]
+    fn test_substitute_no_occurrences() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s2.clone()),
+        ]);
+
+        let replacement = ConditionExpression::constant(true);
+        let result = expr.substitute(&s3, &replacement);
+
+        // Should be unchanged
+        assert_eq!(result, expr);
+        assert_eq!(result.to_string(), "and(1,2)");
+    }
+
+    #[test]
+    fn test_substitute_chain() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        let expr = ConditionExpression::statement(s1.clone());
+
+        // First substitution: 1 -> 2
+        let result1 = expr.substitute(&s1, &ConditionExpression::statement(s2.clone()));
+        assert_eq!(result1.to_string(), "2");
+
+        // Second substitution: 2 -> 3
+        let result2 = result1.substitute(&s2, &ConditionExpression::statement(s3.clone()));
+        assert_eq!(result2.to_string(), "3");
+    }
+
+    // Tests for binarize
+
+    #[test]
+    fn test_binarize_constant() {
+        let expr = ConditionExpression::constant(true);
+        let result = expr.binarize();
+        assert_eq!(result, expr);
+        assert!(result.is_constant());
+    }
+
+    #[test]
+    fn test_binarize_statement() {
+        let s1 = Statement::from(1);
+        let expr = ConditionExpression::statement(s1.clone());
+        let result = expr.binarize();
+        assert_eq!(result, expr);
+        assert!(result.is_statement());
+    }
+
+    #[test]
+    fn test_binarize_negation() {
+        let s1 = Statement::from(1);
+        let expr = ConditionExpression::negation(ConditionExpression::statement(s1));
+        let result = expr.binarize();
+        assert!(result.is_negation());
+        assert_eq!(result.to_string(), "neg(1)");
+    }
+
+    #[test]
+    fn test_binarize_and_empty() {
+        let expr = ConditionExpression::and(&[]);
+        let result = expr.binarize();
+        assert!(result.is_constant());
+        assert_eq!(result.as_constant(), Some(true));
+    }
+
+    #[test]
+    fn test_binarize_and_single() {
+        let s1 = Statement::from(1);
+        let expr = ConditionExpression::and(&[ConditionExpression::statement(s1.clone())]);
+        let result = expr.binarize();
+        assert!(result.is_statement());
+        assert_eq!(result.to_string(), "1");
+    }
+
+    #[test]
+    fn test_binarize_and_two() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+        ]);
+        let result = expr.binarize();
+        assert!(result.is_and());
+        assert_eq!(result.to_string(), "and(1,2)");
+    }
+
+    #[test]
+    fn test_binarize_and_three() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+            ConditionExpression::statement(s3),
+        ]);
+        let result = expr.binarize();
+        // Should be: and(and(1, 2), 3)
+        assert_eq!(result.to_string(), "and(and(1,2),3)");
+    }
+
+    #[test]
+    fn test_binarize_and_four() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+        let s4 = Statement::from(4);
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+            ConditionExpression::statement(s3),
+            ConditionExpression::statement(s4),
+        ]);
+        let result = expr.binarize();
+        // Should be: and(and(and(1, 2), 3), 4)
+        assert_eq!(result.to_string(), "and(and(and(1,2),3),4)");
+    }
+
+    #[test]
+    fn test_binarize_or_empty() {
+        let expr = ConditionExpression::or(&[]);
+        let result = expr.binarize();
+        assert!(result.is_constant());
+        assert_eq!(result.as_constant(), Some(false));
+    }
+
+    #[test]
+    fn test_binarize_or_single() {
+        let s1 = Statement::from(1);
+        let expr = ConditionExpression::or(&[ConditionExpression::statement(s1.clone())]);
+        let result = expr.binarize();
+        assert!(result.is_statement());
+        assert_eq!(result.to_string(), "1");
+    }
+
+    #[test]
+    fn test_binarize_or_two() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+        ]);
+        let result = expr.binarize();
+        assert!(result.is_or());
+        assert_eq!(result.to_string(), "or(1,2)");
+    }
+
+    #[test]
+    fn test_binarize_or_three() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+            ConditionExpression::statement(s3),
+        ]);
+        let result = expr.binarize();
+        // Should be: or(or(1, 2), 3)
+        assert_eq!(result.to_string(), "or(or(1,2),3)");
+    }
+
+    #[test]
+    fn test_binarize_or_five() {
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+            ConditionExpression::statement(Statement::from(3)),
+            ConditionExpression::statement(Statement::from(4)),
+            ConditionExpression::statement(Statement::from(5)),
+        ]);
+        let result = expr.binarize();
+        // Should be: or(or(or(or(1, 2), 3), 4), 5)
+        assert_eq!(result.to_string(), "or(or(or(or(1,2),3),4),5)");
+    }
+
+    #[test]
+    fn test_binarize_nested_and_or() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+        let s4 = Statement::from(4);
+
+        // Create: and(1, 2, or(3, 4))
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+            ConditionExpression::or(&[
+                ConditionExpression::statement(s3),
+                ConditionExpression::statement(s4),
+            ]),
+        ]);
+        let result = expr.binarize();
+        // Should be: and(and(1, 2), or(3, 4))
+        assert_eq!(result.to_string(), "and(and(1,2),or(3,4))");
+    }
+
+    #[test]
+    fn test_binarize_deeply_nested() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+        let s4 = Statement::from(4);
+
+        // Create: and(or(1, 2, 3), 4)
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::or(&[
+                ConditionExpression::statement(s1),
+                ConditionExpression::statement(s2),
+                ConditionExpression::statement(s3),
+            ]),
+            ConditionExpression::statement(s4),
+        ]);
+        let result = expr.binarize();
+        // Should be: and(or(or(1, 2), 3), 4)
+        assert_eq!(result.to_string(), "and(or(or(1,2),3),4)");
+    }
+
+    #[test]
+    fn test_binarize_with_negation() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // Create: and(neg(1), 2, 3)
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::negation(ConditionExpression::statement(s1)),
+            ConditionExpression::statement(s2),
+            ConditionExpression::statement(s3),
+        ]);
+        let result = expr.binarize();
+        // Should be: and(and(neg(1), 2), 3)
+        assert_eq!(result.to_string(), "and(and(neg(1),2),3)");
+    }
+
+    #[test]
+    fn test_binarize_implication() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // Create: imp(and(1, 2, 3), 1)
+        let expr = ConditionExpression::implication(
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(s2),
+                ConditionExpression::statement(s3),
+            ]),
+            ConditionExpression::statement(s1),
+        );
+        let result = expr.binarize();
+        // Should binarize the and inside
+        assert_eq!(result.to_string(), "imp(and(and(1,2),3),1)");
+    }
+
+    #[test]
+    fn test_binarize_equivalence() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // Create: iff(or(1, 2, 3), 1)
+        let expr = ConditionExpression::equivalence(
+            ConditionExpression::or(&[
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(s2),
+                ConditionExpression::statement(s3),
+            ]),
+            ConditionExpression::statement(s1),
+        );
+        let result = expr.binarize();
+        // Should binarize the or inside
+        assert_eq!(result.to_string(), "iff(or(or(1,2),3),1)");
+    }
+
+    #[test]
+    fn test_binarize_xor() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // Create: xor(and(1, 2, 3), 1)
+        let expr = ConditionExpression::exclusive_or(
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(s2),
+                ConditionExpression::statement(s3),
+            ]),
+            ConditionExpression::statement(s1),
+        );
+        let result = expr.binarize();
+        // Should binarize the and inside
+        assert_eq!(result.to_string(), "xor(and(and(1,2),3),1)");
+    }
+
+    #[test]
+    fn test_binarize_already_binary() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+        ]);
+        let result = expr.binarize();
+        // Should remain the same
+        assert_eq!(result, expr);
+    }
+
+    #[test]
+    fn test_binarize_complex_mixed() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+        let s4 = Statement::from(4);
+        let s5 = Statement::from(5);
+
+        // Create: or(and(1, 2, 3), and(4, 5))
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s1),
+                ConditionExpression::statement(s2),
+                ConditionExpression::statement(s3),
+            ]),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s4),
+                ConditionExpression::statement(s5),
+            ]),
+        ]);
+        let result = expr.binarize();
+        // Should be: or(and(and(1, 2), 3), and(4, 5))
+        assert_eq!(result.to_string(), "or(and(and(1,2),3),and(4,5))");
+    }
+
+    #[test]
+    fn test_binarize_idempotent() {
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+            ConditionExpression::statement(s3),
+        ]);
+        let result1 = expr.binarize();
+        let result2 = result1.binarize();
+        // Binarizing a binarized expression should not change it
+        assert_eq!(result1, result2);
     }
 }

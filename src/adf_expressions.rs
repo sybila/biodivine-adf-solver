@@ -287,6 +287,177 @@ impl AdfExpressions {
         let content = self.write();
         std::fs::write(path.as_ref(), content).map_err(|e| format!("Failed to write file: {}", e))
     }
+
+    /// Substitute all occurrences of a statement with a condition expression in all conditions.
+    ///
+    /// This method applies the substitution to all conditions in the ADF. The statement
+    /// being replaced can still exist in the ADF as a declared statement; only its
+    /// occurrences within conditions are replaced.
+    ///
+    /// # Arguments
+    ///
+    /// * `statement` - The statement to replace in all conditions
+    /// * `replacement` - The expression to substitute in place of the statement
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{AdfExpressions, ConditionExpression, Statement};
+    /// let mut adf = AdfExpressions::new();
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    /// let s3 = Statement::from(3);
+    ///
+    /// // Add condition: ac(1, and(2, 3))
+    /// adf.add_condition(s1.clone(), ConditionExpression::and(&[
+    ///     ConditionExpression::statement(s2.clone()),
+    ///     ConditionExpression::statement(s3.clone()),
+    /// ])).unwrap();
+    ///
+    /// // Substitute s2 with neg(s3)
+    /// adf.substitute_statement(&s2, &ConditionExpression::negation(
+    ///     ConditionExpression::statement(s3.clone())
+    /// ));
+    ///
+    /// // Now s1's condition is: and(neg(3), 3)
+    /// assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "and(neg(3),3)");
+    /// ```
+    pub fn substitute_statement(
+        &mut self,
+        statement: &Statement,
+        replacement: &ConditionExpression,
+    ) {
+        for (_, condition) in self.conditions.iter_mut() {
+            if let Some(cond) = condition {
+                *cond = cond.substitute(statement, replacement);
+            }
+        }
+    }
+
+    /// Convert all n-ary AND and OR operators to binary operators in all conditions.
+    ///
+    /// This method applies the binarization transformation to every condition in the ADF.
+    /// N-ary AND and OR operations are converted to left-associative binary operations:
+    /// - `and(a, b, c)` becomes `and(and(a, b), c)`
+    /// - `or(a, b, c, d)` becomes `or(or(or(a, b), c), d)`
+    ///
+    /// See [`ConditionExpression::binarize`] for details on the transformation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{AdfExpressions, ConditionExpression, Statement};
+    /// let mut adf = AdfExpressions::new();
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    /// let s3 = Statement::from(3);
+    ///
+    /// // Add condition: ac(1, and(2, 3, 1))
+    /// adf.add_condition(s1.clone(), ConditionExpression::and(&[
+    ///     ConditionExpression::statement(s2),
+    ///     ConditionExpression::statement(s3),
+    ///     ConditionExpression::statement(s1.clone()),
+    /// ])).unwrap();
+    ///
+    /// adf.binarize_operators();
+    ///
+    /// // Now the condition is: ac(1, and(and(2, 3), 1))
+    /// assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "and(and(2,3),1)");
+    /// ```
+    pub fn binarize_operators(&mut self) {
+        for (_, condition) in self.conditions.iter_mut() {
+            if let Some(cond) = condition {
+                *cond = cond.binarize();
+            }
+        }
+    }
+
+    /// Rename a statement throughout the entire ADF.
+    ///
+    /// This method renames a statement both in the statement list and in all conditions.
+    /// If the old statement has a condition, it will be moved to the new statement.
+    /// All occurrences of the old statement in conditions will be replaced with the new statement.
+    ///
+    /// If the new statement already exists, this method will fail and return an error.
+    /// After renaming, the old statement will no longer exist in the ADF.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_statement` - The statement to rename
+    /// * `new_statement` - The new statement name
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if:
+    /// - The old statement doesn't exist in the ADF
+    /// - The new statement already exists in the ADF
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{AdfExpressions, ConditionExpression, Statement};
+    /// let mut adf = AdfExpressions::new();
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    ///
+    /// // Add conditions: ac(1, 2), ac(2, 1)
+    /// adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone())).unwrap();
+    /// adf.add_condition(s2.clone(), ConditionExpression::statement(s1.clone())).unwrap();
+    ///
+    /// // Rename s1 to s99
+    /// adf.rename_statement(&s1, &Statement::from(99)).unwrap();
+    ///
+    /// // Now s1 is gone, s99 exists
+    /// assert!(!adf.has_statement(&s1));
+    /// assert!(adf.has_statement(&Statement::from(99)));
+    /// // ac(99, 2) and ac(2, 99)
+    /// assert_eq!(adf.get_condition(&Statement::from(99)).unwrap().to_string(), "2");
+    /// assert_eq!(adf.get_condition(&s2).unwrap().to_string(), "99");
+    /// ```
+    pub fn rename_statement(
+        &mut self,
+        old_statement: &Statement,
+        new_statement: &Statement,
+    ) -> Result<(), String> {
+        // Check if old statement exists
+        if !self.conditions.contains_key(old_statement) {
+            return Err(format!(
+                "Statement {} does not exist in the ADF",
+                old_statement
+            ));
+        }
+
+        // Check if new statement already exists
+        if self.conditions.contains_key(new_statement) {
+            return Err(format!(
+                "Statement {} already exists in the ADF",
+                new_statement
+            ));
+        }
+
+        // Remove the old statement and get its condition
+        let old_condition = self.conditions.remove(old_statement);
+
+        // Substitute old statement with new statement in all conditions
+        let replacement = ConditionExpression::statement(new_statement.clone());
+        for (_, condition) in self.conditions.iter_mut() {
+            if let Some(cond) = condition
+                && cond.collect_statements().contains(old_statement)
+            {
+                *cond = cond.substitute(old_statement, &replacement);
+            }
+        }
+
+        // Also substitute in the condition we just removed (if it exists)
+        let new_condition = old_condition
+            .map(|opt_cond| opt_cond.map(|cond| cond.substitute(old_statement, &replacement)));
+
+        // Insert the new statement with the (possibly modified) condition
+        self.conditions
+            .insert(new_statement.clone(), new_condition.flatten());
+
+        Ok(())
+    }
 }
 
 impl Default for AdfExpressions {
@@ -1552,6 +1723,969 @@ ac(foo, neg(1)).
         assert!(adf.has_statement(&s_foo));
         assert!(adf.get_condition(&s1).is_some());
         assert!(adf.get_condition(&s_foo).is_some());
+    }
+
+    // Tests for substitute_statement
+
+    #[test]
+    fn test_substitute_statement_simple() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+
+        let replacement = ConditionExpression::constant(true);
+        adf.substitute_statement(&s2, &replacement);
+
+        let cond = adf.get_condition(&s1).unwrap();
+        assert!(cond.is_constant());
+        assert_eq!(cond.as_constant(), Some(true));
+    }
+
+    #[test]
+    fn test_substitute_statement_multiple_conditions() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // ac(1, 2)
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+        // ac(2, and(3, 3))
+        adf.add_condition(
+            s2.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s3.clone()),
+                ConditionExpression::statement(s3.clone()),
+            ]),
+        )
+        .unwrap();
+
+        let replacement = ConditionExpression::constant(false);
+        adf.substitute_statement(&s3, &replacement);
+
+        // s1's condition should be unchanged
+        assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "2");
+        // s2's condition should have both s3 replaced
+        assert_eq!(
+            adf.get_condition(&s2).unwrap().to_string(),
+            "and(c(f),c(f))"
+        );
+    }
+
+    #[test]
+    fn test_substitute_statement_no_occurrences() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+
+        let original = adf.get_condition(&s1).unwrap().clone();
+        let replacement = ConditionExpression::constant(true);
+        adf.substitute_statement(&s3, &replacement);
+
+        // Condition should be unchanged
+        assert_eq!(adf.get_condition(&s1).unwrap(), &original);
+    }
+
+    #[test]
+    fn test_substitute_statement_complex_expression() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // ac(1, and(or(2, 3), neg(2)))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::or(&[
+                    ConditionExpression::statement(s2.clone()),
+                    ConditionExpression::statement(s3.clone()),
+                ]),
+                ConditionExpression::negation(ConditionExpression::statement(s2.clone())),
+            ]),
+        )
+        .unwrap();
+
+        let replacement = ConditionExpression::constant(true);
+        adf.substitute_statement(&s2, &replacement);
+
+        // Result should be: and(or(c(v), 3), neg(c(v)))
+        assert_eq!(
+            adf.get_condition(&s1).unwrap().to_string(),
+            "and(or(c(v),3),neg(c(v)))"
+        );
+    }
+
+    #[test]
+    fn test_substitute_statement_with_complex_replacement() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // ac(1, and(2, 3))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s2.clone()),
+                ConditionExpression::statement(s3.clone()),
+            ]),
+        )
+        .unwrap();
+
+        // Replace s2 with "or(3, s3)"
+        let replacement = ConditionExpression::or(&[
+            ConditionExpression::statement(s3.clone()),
+            ConditionExpression::statement(s3.clone()),
+        ]);
+        adf.substitute_statement(&s2, &replacement);
+
+        // Result should be: and(or(3, 3), 3)
+        assert_eq!(
+            adf.get_condition(&s1).unwrap().to_string(),
+            "and(or(3,3),3)"
+        );
+    }
+
+    #[test]
+    fn test_substitute_statement_free_statements_unchanged() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        // s1 has no condition
+        adf.add_statement(s1.clone());
+        // s2 has a condition
+        adf.add_condition(s2.clone(), ConditionExpression::statement(s1.clone()))
+            .unwrap();
+
+        let replacement = ConditionExpression::constant(false);
+        adf.substitute_statement(&s1, &replacement);
+
+        // s1 should still be free (no condition)
+        assert!(adf.get_condition(&s1).is_none());
+        // s2's condition should be updated
+        assert_eq!(adf.get_condition(&s2).unwrap().to_string(), "c(f)");
+    }
+
+    #[test]
+    fn test_substitute_statement_chain() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // ac(1, 2)
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+
+        // First substitution: 2 -> 3
+        adf.substitute_statement(&s2, &ConditionExpression::statement(s3.clone()));
+        assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "3");
+
+        // Second substitution: 3 -> c(v)
+        adf.substitute_statement(&s3, &ConditionExpression::constant(true));
+        assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "c(v)");
+    }
+
+    #[test]
+    fn test_substitute_statement_self_reference() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, 1) - self-referential
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s1.clone()))
+            .unwrap();
+
+        let replacement = ConditionExpression::constant(false);
+        adf.substitute_statement(&s1, &replacement);
+
+        // The self-reference should be replaced
+        assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "c(f)");
+    }
+
+    #[test]
+    fn test_substitute_statement_all_operators() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s_target = Statement::from(99);
+
+        // Test with implication
+        adf.add_condition(
+            Statement::from(10),
+            ConditionExpression::implication(
+                ConditionExpression::statement(s_target.clone()),
+                ConditionExpression::statement(s1.clone()),
+            ),
+        )
+        .unwrap();
+
+        // Test with equivalence
+        adf.add_condition(
+            Statement::from(11),
+            ConditionExpression::equivalence(
+                ConditionExpression::statement(s_target.clone()),
+                ConditionExpression::statement(s1.clone()),
+            ),
+        )
+        .unwrap();
+
+        // Test with xor
+        adf.add_condition(
+            Statement::from(12),
+            ConditionExpression::exclusive_or(
+                ConditionExpression::statement(s_target.clone()),
+                ConditionExpression::statement(s2.clone()),
+            ),
+        )
+        .unwrap();
+
+        let replacement = ConditionExpression::constant(true);
+        adf.substitute_statement(&s_target, &replacement);
+
+        // Check all conditions have been updated
+        assert_eq!(
+            adf.get_condition(&Statement::from(10)).unwrap().to_string(),
+            "imp(c(v),1)"
+        );
+        assert_eq!(
+            adf.get_condition(&Statement::from(11)).unwrap().to_string(),
+            "iff(c(v),1)"
+        );
+        assert_eq!(
+            adf.get_condition(&Statement::from(12)).unwrap().to_string(),
+            "xor(c(v),2)"
+        );
+    }
+
+    #[test]
+    fn test_substitute_statement_empty_adf() {
+        let mut adf = AdfExpressions::new();
+
+        // Should not panic on empty ADF
+        adf.substitute_statement(&Statement::from(1), &ConditionExpression::constant(true));
+
+        assert!(adf.is_empty());
+    }
+
+    #[test]
+    fn test_substitute_statement_preserves_statements() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+        adf.add_statement(s2.clone());
+        adf.add_statement(s3.clone());
+
+        let replacement = ConditionExpression::constant(true);
+        adf.substitute_statement(&s2, &replacement);
+
+        // All statements should still exist (substitution doesn't remove statements)
+        assert_eq!(adf.len(), 3);
+        assert!(adf.has_statement(&s1));
+        assert!(adf.has_statement(&s2));
+        assert!(adf.has_statement(&s3));
+    }
+
+    #[test]
+    fn test_substitute_statement_parse_roundtrip() {
+        let input = r#"
+s(1).
+s(2).
+s(3).
+ac(1, and(2, 3)).
+ac(2, or(1, 3)).
+"#;
+        let mut adf = AdfExpressions::parse(input).unwrap();
+
+        // Substitute s3 with neg(s1)
+        adf.substitute_statement(
+            &Statement::from(3),
+            &ConditionExpression::negation(ConditionExpression::statement(Statement::from(1))),
+        );
+
+        // Write and reparse
+        let output = adf.write();
+        let adf2 = AdfExpressions::parse(&output).unwrap();
+
+        // Should be equal
+        assert_eq!(adf, adf2);
+
+        // Verify the substitution took effect
+        assert_eq!(
+            adf2.get_condition(&Statement::from(1)).unwrap().to_string(),
+            "and(2,neg(1))"
+        );
+        assert_eq!(
+            adf2.get_condition(&Statement::from(2)).unwrap().to_string(),
+            "or(1,neg(1))"
+        );
+    }
+
+    // Tests for binarize_operators
+
+    #[test]
+    fn test_binarize_operators_empty_adf() {
+        let mut adf = AdfExpressions::new();
+        adf.binarize_operators();
+        assert!(adf.is_empty());
+    }
+
+    #[test]
+    fn test_binarize_operators_simple() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // ac(1, and(2, 3))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s2),
+                ConditionExpression::statement(s3),
+            ]),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+
+        // Should remain and(2, 3) - already binary
+        assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "and(2,3)");
+    }
+
+    #[test]
+    fn test_binarize_operators_ternary_and() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, and(2, 3, 4))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+                ConditionExpression::statement(Statement::from(4)),
+            ]),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+
+        // Should become and(and(2, 3), 4)
+        assert_eq!(
+            adf.get_condition(&s1).unwrap().to_string(),
+            "and(and(2,3),4)"
+        );
+    }
+
+    #[test]
+    fn test_binarize_operators_ternary_or() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, or(2, 3, 4))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::or(&[
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+                ConditionExpression::statement(Statement::from(4)),
+            ]),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+
+        // Should become or(or(2, 3), 4)
+        assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "or(or(2,3),4)");
+    }
+
+    #[test]
+    fn test_binarize_operators_multiple_conditions() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        // ac(1, and(2, 3, 4))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+                ConditionExpression::statement(Statement::from(4)),
+            ]),
+        )
+        .unwrap();
+
+        // ac(2, or(1, 3, 4, 5))
+        adf.add_condition(
+            s2.clone(),
+            ConditionExpression::or(&[
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(Statement::from(3)),
+                ConditionExpression::statement(Statement::from(4)),
+                ConditionExpression::statement(Statement::from(5)),
+            ]),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+
+        assert_eq!(
+            adf.get_condition(&s1).unwrap().to_string(),
+            "and(and(2,3),4)"
+        );
+        assert_eq!(
+            adf.get_condition(&s2).unwrap().to_string(),
+            "or(or(or(1,3),4),5)"
+        );
+    }
+
+    #[test]
+    fn test_binarize_operators_nested() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, and(or(2, 3, 4), 5))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::or(&[
+                    ConditionExpression::statement(Statement::from(2)),
+                    ConditionExpression::statement(Statement::from(3)),
+                    ConditionExpression::statement(Statement::from(4)),
+                ]),
+                ConditionExpression::statement(Statement::from(5)),
+            ]),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+
+        // Should become and(or(or(2, 3), 4), 5)
+        assert_eq!(
+            adf.get_condition(&s1).unwrap().to_string(),
+            "and(or(or(2,3),4),5)"
+        );
+    }
+
+    #[test]
+    fn test_binarize_operators_free_statements_unchanged() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        adf.add_statement(s1.clone());
+        adf.add_condition(
+            s2.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(Statement::from(1)),
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+            ]),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+
+        // s1 should still be free
+        assert!(adf.get_condition(&s1).is_none());
+        // s2's condition should be binarized
+        assert_eq!(
+            adf.get_condition(&s2).unwrap().to_string(),
+            "and(and(1,2),3)"
+        );
+    }
+
+    #[test]
+    fn test_binarize_operators_complex_expression() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, imp(and(2, 3, 4), or(5, 6, 7)))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::implication(
+                ConditionExpression::and(&[
+                    ConditionExpression::statement(Statement::from(2)),
+                    ConditionExpression::statement(Statement::from(3)),
+                    ConditionExpression::statement(Statement::from(4)),
+                ]),
+                ConditionExpression::or(&[
+                    ConditionExpression::statement(Statement::from(5)),
+                    ConditionExpression::statement(Statement::from(6)),
+                    ConditionExpression::statement(Statement::from(7)),
+                ]),
+            ),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+
+        // Should become imp(and(and(2, 3), 4), or(or(5, 6), 7))
+        assert_eq!(
+            adf.get_condition(&s1).unwrap().to_string(),
+            "imp(and(and(2,3),4),or(or(5,6),7))"
+        );
+    }
+
+    #[test]
+    fn test_binarize_operators_with_constants() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, and(c(v), 2, 3))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::constant(true),
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+            ]),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+
+        // Should become and(and(c(v), 2), 3)
+        assert_eq!(
+            adf.get_condition(&s1).unwrap().to_string(),
+            "and(and(c(v),2),3)"
+        );
+    }
+
+    #[test]
+    fn test_binarize_operators_idempotent() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, and(2, 3, 4))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+                ConditionExpression::statement(Statement::from(4)),
+            ]),
+        )
+        .unwrap();
+
+        adf.binarize_operators();
+        let first_result = adf.get_condition(&s1).unwrap().to_string();
+
+        adf.binarize_operators();
+        let second_result = adf.get_condition(&s1).unwrap().to_string();
+
+        // Binarizing twice should produce the same result
+        assert_eq!(first_result, second_result);
+    }
+
+    #[test]
+    fn test_binarize_operators_parse_roundtrip() {
+        let input = r#"
+s(1).
+s(2).
+ac(1, and(2, 3, 4)).
+ac(2, or(1, 3, 4, 5)).
+"#;
+        let mut adf = AdfExpressions::parse(input).unwrap();
+
+        adf.binarize_operators();
+
+        // Write and reparse
+        let output = adf.write();
+        let adf2 = AdfExpressions::parse(&output).unwrap();
+
+        // Should be equal
+        assert_eq!(adf, adf2);
+
+        // Verify binarization
+        assert_eq!(
+            adf2.get_condition(&Statement::from(1)).unwrap().to_string(),
+            "and(and(2,3),4)"
+        );
+        assert_eq!(
+            adf2.get_condition(&Statement::from(2)).unwrap().to_string(),
+            "or(or(or(1,3),4),5)"
+        );
+    }
+
+    // Tests for rename_statement
+
+    #[test]
+    fn test_rename_statement_simple() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s99 = Statement::from(99);
+
+        adf.add_statement(s1.clone());
+
+        let result = adf.rename_statement(&s1, &s99);
+        assert!(result.is_ok());
+
+        // Old statement should not exist
+        assert!(!adf.has_statement(&s1));
+        // New statement should exist
+        assert!(adf.has_statement(&s99));
+        assert_eq!(adf.len(), 1);
+    }
+
+    #[test]
+    fn test_rename_statement_with_condition() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s99 = Statement::from(99);
+
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+
+        let result = adf.rename_statement(&s1, &s99);
+        assert!(result.is_ok());
+
+        // s99 should have the condition that s1 had
+        assert!(adf.get_condition(&s99).is_some());
+        assert_eq!(adf.get_condition(&s99).unwrap().to_string(), "2");
+        // s1 should not exist
+        assert!(!adf.has_statement(&s1));
+    }
+
+    #[test]
+    fn test_rename_statement_referenced_in_conditions() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s99 = Statement::from(99);
+
+        // ac(1, 2)
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+        // ac(2, 1)
+        adf.add_condition(s2.clone(), ConditionExpression::statement(s1.clone()))
+            .unwrap();
+
+        let result = adf.rename_statement(&s1, &s99);
+        assert!(result.is_ok());
+
+        // ac(99, 2) - the renamed statement's condition
+        assert_eq!(adf.get_condition(&s99).unwrap().to_string(), "2");
+        // ac(2, 99) - s1 replaced with s99 in s2's condition
+        assert_eq!(adf.get_condition(&s2).unwrap().to_string(), "99");
+    }
+
+    #[test]
+    fn test_rename_statement_self_referential() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s99 = Statement::from(99);
+
+        // ac(1, neg(1))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::negation(ConditionExpression::statement(s1.clone())),
+        )
+        .unwrap();
+
+        let result = adf.rename_statement(&s1, &s99);
+        assert!(result.is_ok());
+
+        // ac(99, neg(99))
+        assert_eq!(adf.get_condition(&s99).unwrap().to_string(), "neg(99)");
+    }
+
+    #[test]
+    fn test_rename_statement_complex_expression() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+        let s99 = Statement::from(99);
+
+        // ac(1, and(or(2, 1), neg(1)))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::or(&[
+                    ConditionExpression::statement(s2.clone()),
+                    ConditionExpression::statement(s1.clone()),
+                ]),
+                ConditionExpression::negation(ConditionExpression::statement(s1.clone())),
+            ]),
+        )
+        .unwrap();
+        // ac(3, 1)
+        adf.add_condition(s3.clone(), ConditionExpression::statement(s1.clone()))
+            .unwrap();
+
+        let result = adf.rename_statement(&s1, &s99);
+        assert!(result.is_ok());
+
+        // ac(99, and(or(2, 99), neg(99)))
+        assert_eq!(
+            adf.get_condition(&s99).unwrap().to_string(),
+            "and(or(2,99),neg(99))"
+        );
+        // ac(3, 99)
+        assert_eq!(adf.get_condition(&s3).unwrap().to_string(), "99");
+    }
+
+    #[test]
+    fn test_rename_statement_multiple_occurrences() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s99 = Statement::from(99);
+
+        // Add s1 as a statement
+        adf.add_statement(s1.clone());
+        // ac(2, or(1, and(1, 1)))
+        adf.add_condition(
+            s2.clone(),
+            ConditionExpression::or(&[
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::and(&[
+                    ConditionExpression::statement(s1.clone()),
+                    ConditionExpression::statement(s1.clone()),
+                ]),
+            ]),
+        )
+        .unwrap();
+
+        let result = adf.rename_statement(&s1, &s99);
+        assert!(result.is_ok());
+
+        // All occurrences should be renamed
+        assert_eq!(
+            adf.get_condition(&s2).unwrap().to_string(),
+            "or(99,and(99,99))"
+        );
+    }
+
+    #[test]
+    fn test_rename_statement_nonexistent_fails() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s99 = Statement::from(99);
+
+        adf.add_statement(s1.clone());
+
+        let result = adf.rename_statement(&s99, &s2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_rename_statement_target_exists_fails() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        adf.add_statement(s1.clone());
+        adf.add_statement(s2.clone());
+
+        let result = adf.rename_statement(&s1, &s2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn test_rename_statement_preserves_other_statements() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+        let s99 = Statement::from(99);
+
+        adf.add_statement(s1.clone());
+        adf.add_statement(s2.clone());
+        adf.add_statement(s3.clone());
+
+        let result = adf.rename_statement(&s1, &s99);
+        assert!(result.is_ok());
+
+        // s2 and s3 should still exist
+        assert!(adf.has_statement(&s2));
+        assert!(adf.has_statement(&s3));
+        assert!(adf.has_statement(&s99));
+        assert!(!adf.has_statement(&s1));
+        assert_eq!(adf.len(), 3);
+    }
+
+    #[test]
+    fn test_rename_statement_with_free_statement() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s99 = Statement::from(99);
+
+        // s1 has no condition (free statement)
+        adf.add_statement(s1.clone());
+
+        let result = adf.rename_statement(&s1, &s99);
+        assert!(result.is_ok());
+
+        // s99 should be free as well
+        assert!(adf.has_statement(&s99));
+        assert!(adf.get_condition(&s99).is_none());
+    }
+
+    #[test]
+    fn test_rename_statement_chain() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        adf.add_condition(s1.clone(), ConditionExpression::constant(true))
+            .unwrap();
+
+        // Rename 1 -> 2
+        let result = adf.rename_statement(&s1, &s2);
+        assert!(result.is_ok());
+        assert!(adf.has_statement(&s2));
+        assert!(!adf.has_statement(&s1));
+
+        // Rename 2 -> 3
+        let result = adf.rename_statement(&s2, &s3);
+        assert!(result.is_ok());
+        assert!(adf.has_statement(&s3));
+        assert!(!adf.has_statement(&s2));
+        assert_eq!(adf.get_condition(&s3).unwrap().to_string(), "c(v)");
+    }
+
+    #[test]
+    fn test_rename_statement_all_operators() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s_target = Statement::from(99);
+        let s_new = Statement::from(100);
+
+        // Add the target statement that we'll rename
+        adf.add_statement(s_target.clone());
+
+        // Test with various operators
+        adf.add_condition(
+            Statement::from(10),
+            ConditionExpression::implication(
+                ConditionExpression::statement(s_target.clone()),
+                ConditionExpression::statement(s1.clone()),
+            ),
+        )
+        .unwrap();
+
+        adf.add_condition(
+            Statement::from(11),
+            ConditionExpression::equivalence(
+                ConditionExpression::statement(s_target.clone()),
+                ConditionExpression::statement(s1.clone()),
+            ),
+        )
+        .unwrap();
+
+        adf.add_condition(
+            Statement::from(12),
+            ConditionExpression::exclusive_or(
+                ConditionExpression::statement(s_target.clone()),
+                ConditionExpression::statement(s1.clone()),
+            ),
+        )
+        .unwrap();
+
+        let result = adf.rename_statement(&s_target, &s_new);
+        assert!(result.is_ok());
+
+        assert_eq!(
+            adf.get_condition(&Statement::from(10)).unwrap().to_string(),
+            "imp(100,1)"
+        );
+        assert_eq!(
+            adf.get_condition(&Statement::from(11)).unwrap().to_string(),
+            "iff(100,1)"
+        );
+        assert_eq!(
+            adf.get_condition(&Statement::from(12)).unwrap().to_string(),
+            "xor(100,1)"
+        );
+        assert!(!adf.has_statement(&s_target));
+        assert!(adf.has_statement(&s_new));
+    }
+
+    #[test]
+    fn test_rename_statement_parse_roundtrip() {
+        let input = r#"
+s(1).
+s(2).
+s(3).
+ac(1, and(2, 3)).
+ac(2, or(1, 3)).
+ac(3, neg(1)).
+"#;
+        let mut adf = AdfExpressions::parse(input).unwrap();
+
+        // Rename s1 to s99
+        let result = adf.rename_statement(&Statement::from(1), &Statement::from(99));
+        assert!(result.is_ok());
+
+        // Write and reparse
+        let output = adf.write();
+        let adf2 = AdfExpressions::parse(&output).unwrap();
+
+        // Should be equal
+        assert_eq!(adf, adf2);
+
+        // Verify the rename took effect
+        assert!(!adf2.has_statement(&Statement::from(1)));
+        assert!(adf2.has_statement(&Statement::from(99)));
+        assert_eq!(
+            adf2.get_condition(&Statement::from(99))
+                .unwrap()
+                .to_string(),
+            "and(2,3)"
+        );
+        assert_eq!(
+            adf2.get_condition(&Statement::from(2)).unwrap().to_string(),
+            "or(99,3)"
+        );
+        assert_eq!(
+            adf2.get_condition(&Statement::from(3)).unwrap().to_string(),
+            "neg(99)"
+        );
+    }
+
+    #[test]
+    fn test_rename_statement_string_labels() {
+        let mut adf = AdfExpressions::new();
+        let s_foo = Statement::from("foo");
+        let s_bar = Statement::from("bar");
+        let s_baz = Statement::from("baz");
+
+        // ac(foo, bar)
+        adf.add_condition(s_foo.clone(), ConditionExpression::statement(s_bar.clone()))
+            .unwrap();
+        // ac(bar, foo)
+        adf.add_condition(s_bar.clone(), ConditionExpression::statement(s_foo.clone()))
+            .unwrap();
+
+        let result = adf.rename_statement(&s_foo, &s_baz);
+        assert!(result.is_ok());
+
+        assert!(!adf.has_statement(&s_foo));
+        assert!(adf.has_statement(&s_baz));
+        assert_eq!(adf.get_condition(&s_baz).unwrap().to_string(), "bar");
+        assert_eq!(adf.get_condition(&s_bar).unwrap().to_string(), "baz");
     }
 
     // Comprehensive test: parse and write all test instances
