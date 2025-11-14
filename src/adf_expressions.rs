@@ -298,6 +298,7 @@ impl Default for AdfExpressions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn test_parse_simple_adf() {
@@ -434,8 +435,18 @@ ac(2,and(neg(9),neg(6))).
         }
     }
 
-    #[test]
-    fn test_parse_all_test_instances() {
+    #[rstest]
+    #[case("A-")]
+    #[case("B-")]
+    #[case("C-")]
+    #[case("T-")]
+    #[case("adfgen_acyc")]
+    #[case("adfgen_nacyc")]
+    #[case("comma")]
+    #[case("metro")]
+    #[case("Small")]
+    #[case("Medium")]
+    fn test_parse_all_test_instances(#[case] prefix: &str) {
         use std::fs;
         use std::path::Path;
 
@@ -451,6 +462,12 @@ ac(2,and(neg(9),neg(6))).
 
         for entry in entries {
             let entry = entry.unwrap();
+
+            if !entry.file_name().to_str().unwrap().starts_with(prefix) {
+                // Skip file names that don't match the desired prefix.
+                continue;
+            }
+
             let path = entry.path();
 
             if path.extension().and_then(|s| s.to_str()) == Some("adf") {
@@ -468,6 +485,9 @@ ac(2,and(neg(9),neg(6))).
                 }
             }
         }
+
+        // Each filter should match at least one test file.
+        assert!(count > 0);
 
         if !errors.is_empty() {
             eprintln!("Failed to parse {} out of {} files:", errors.len(), count);
@@ -1535,8 +1555,18 @@ ac(foo, neg(1)).
     }
 
     // Comprehensive test: parse and write all test instances
-    #[test]
-    fn test_parse_write_all_test_instances() {
+    #[rstest]
+    #[case("A-")]
+    #[case("B-")]
+    #[case("C-")]
+    #[case("T-")]
+    #[case("adfgen_acyc")]
+    #[case("adfgen_nacyc")]
+    #[case("comma")]
+    #[case("metro")]
+    #[case("Small")]
+    #[case("Medium")]
+    fn test_parse_write_all_test_instances(#[case] prefix: &str) {
         use std::collections::HashSet;
         use std::fs;
         use std::path::Path;
@@ -1553,6 +1583,12 @@ ac(foo, neg(1)).
 
         for entry in entries {
             let entry = entry.unwrap();
+
+            if !entry.file_name().to_str().unwrap().starts_with(prefix) {
+                // Skip file names that don't match the desired prefix.
+                continue;
+            }
+
             let path = entry.path();
 
             if path.extension().and_then(|s| s.to_str()) == Some("adf") {
@@ -1622,6 +1658,9 @@ ac(foo, neg(1)).
                 }
             }
         }
+
+        // Each filter should match at least one test file.
+        assert!(count > 0);
 
         if !errors.is_empty() {
             eprintln!(
