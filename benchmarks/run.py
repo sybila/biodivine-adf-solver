@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
 	# Create output directory
 	BENCH_DIR_NORM = BENCH_DIR.replace("/", "_").replace(".", "")
-	OUT_DIR = BENCH_DIR_NORM + "_" + os.path.basename(SCRIPT)
+	OUT_DIR = BENCH_DIR_NORM + "_" + os.path.basename(SCRIPT.split(' ')[0])
 	if PARALLEL > 0:
 		OUT_DIR = OUT_DIR + "_parallel"
 	OUT_DIR = "_run_" + OUT_DIR + "_" + str(int(time.time()))
