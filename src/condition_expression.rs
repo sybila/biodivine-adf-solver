@@ -225,6 +225,87 @@ impl ConditionExpression {
         // Constants don't contain statements
     }
 
+    /// Substitute multiple statements with condition expressions using a map.
+    ///
+    /// This method recursively traverses the expression tree and replaces every
+    /// occurrence of statements in the map with their corresponding replacement expressions.
+    /// This is more efficient than calling `substitute` multiple times.
+    ///
+    /// # Arguments
+    ///
+    /// * `substitutions` - A map from statements to their replacement expressions
+    ///
+    /// # Returns
+    ///
+    /// A new expression with all occurrences of statements in the map replaced.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{ConditionExpression, Statement};
+    /// # use std::collections::BTreeMap;
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    /// let expr = ConditionExpression::and(&[
+    ///     ConditionExpression::statement(s1.clone()),
+    ///     ConditionExpression::statement(s2.clone()),
+    /// ]);
+    ///
+    /// let mut subs = BTreeMap::new();
+    /// subs.insert(s1.clone(), ConditionExpression::constant(true));
+    /// subs.insert(s2.clone(), ConditionExpression::constant(false));
+    /// let result = expr.substitute_many(&subs);
+    ///
+    /// // Result should be: and(c(v), c(f))
+    /// assert_eq!(result.to_string(), "and(c(v),c(f))");
+    /// ```
+    pub fn substitute_many(
+        &self,
+        substitutions: &std::collections::BTreeMap<Statement, ConditionExpression>,
+    ) -> Self {
+        // Optimization: if map is empty, return self
+        if substitutions.is_empty() {
+            return self.clone();
+        }
+
+        match &*self.0 {
+            ConditionExpressionNode::Constant(_) => self.clone(),
+            ConditionExpressionNode::Statement(stmt) => substitutions
+                .get(stmt)
+                .cloned()
+                .unwrap_or_else(|| self.clone()),
+            ConditionExpressionNode::Negation(operand) => {
+                ConditionExpression::negation(operand.substitute_many(substitutions))
+            }
+            ConditionExpressionNode::And(operands) => {
+                let new_operands: Vec<_> = operands
+                    .iter()
+                    .map(|op| op.substitute_many(substitutions))
+                    .collect();
+                ConditionExpression::and(&new_operands)
+            }
+            ConditionExpressionNode::Or(operands) => {
+                let new_operands: Vec<_> = operands
+                    .iter()
+                    .map(|op| op.substitute_many(substitutions))
+                    .collect();
+                ConditionExpression::or(&new_operands)
+            }
+            ConditionExpressionNode::Implication(left, right) => ConditionExpression::implication(
+                left.substitute_many(substitutions),
+                right.substitute_many(substitutions),
+            ),
+            ConditionExpressionNode::Equivalence(left, right) => ConditionExpression::equivalence(
+                left.substitute_many(substitutions),
+                right.substitute_many(substitutions),
+            ),
+            ConditionExpressionNode::ExclusiveOr(left, right) => ConditionExpression::exclusive_or(
+                left.substitute_many(substitutions),
+                right.substitute_many(substitutions),
+            ),
+        }
+    }
+
     /// Substitute all occurrences of a statement with a condition expression.
     ///
     /// This method recursively traverses the expression tree and replaces every
@@ -297,6 +378,58 @@ impl ConditionExpression {
                 left.substitute(statement, replacement),
                 right.substitute(statement, replacement),
             ),
+        }
+    }
+
+    /// Check if this expression contains any non-binary AND or OR operators.
+    ///
+    /// Returns `true` if the expression contains AND or OR operators with anything
+    /// other than exactly 2 operands (0, 1, or 3+ operands).
+    ///
+    /// This is useful for determining if binarization is necessary.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{ConditionExpression, Statement};
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    /// let s3 = Statement::from(3);
+    ///
+    /// // Binary AND
+    /// let expr1 = ConditionExpression::and(&[
+    ///     ConditionExpression::statement(s1.clone()),
+    ///     ConditionExpression::statement(s2.clone()),
+    /// ]);
+    /// assert!(!expr1.has_non_binary_operators());
+    ///
+    /// // Ternary AND
+    /// let expr2 = ConditionExpression::and(&[
+    ///     ConditionExpression::statement(s1),
+    ///     ConditionExpression::statement(s2),
+    ///     ConditionExpression::statement(s3),
+    /// ]);
+    /// assert!(expr2.has_non_binary_operators());
+    /// ```
+    pub fn has_non_binary_operators(&self) -> bool {
+        match &*self.0 {
+            ConditionExpressionNode::Constant(_) | ConditionExpressionNode::Statement(_) => false,
+            ConditionExpressionNode::Negation(operand) => operand.has_non_binary_operators(),
+            ConditionExpressionNode::And(operands) => {
+                operands.len() != 2 || operands.iter().any(|op| op.has_non_binary_operators())
+            }
+            ConditionExpressionNode::Or(operands) => {
+                operands.len() != 2 || operands.iter().any(|op| op.has_non_binary_operators())
+            }
+            ConditionExpressionNode::Implication(left, right) => {
+                left.has_non_binary_operators() || right.has_non_binary_operators()
+            }
+            ConditionExpressionNode::Equivalence(left, right) => {
+                left.has_non_binary_operators() || right.has_non_binary_operators()
+            }
+            ConditionExpressionNode::ExclusiveOr(left, right) => {
+                left.has_non_binary_operators() || right.has_non_binary_operators()
+            }
         }
     }
 
@@ -1348,5 +1481,304 @@ mod tests {
         let result2 = result1.binarize();
         // Binarizing a binarized expression should not change it
         assert_eq!(result1, result2);
+    }
+
+    // Tests for substitute_many
+
+    #[test]
+    fn test_substitute_many_empty_map() {
+        use std::collections::BTreeMap;
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+        ]);
+        let subs = BTreeMap::new();
+        let result = expr.substitute_many(&subs);
+        assert_eq!(result, expr);
+    }
+
+    #[test]
+    fn test_substitute_many_single() {
+        use std::collections::BTreeMap;
+
+        let s1 = Statement::from(1);
+        let expr = ConditionExpression::statement(s1.clone());
+
+        let mut subs = BTreeMap::new();
+        subs.insert(s1, ConditionExpression::constant(true));
+
+        let result = expr.substitute_many(&subs);
+        assert!(result.is_constant());
+        assert_eq!(result.as_constant(), Some(true));
+    }
+
+    #[test]
+    fn test_substitute_many_multiple() {
+        use std::collections::BTreeMap;
+
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s2.clone()),
+            ConditionExpression::statement(s3.clone()),
+        ]);
+
+        let mut subs = BTreeMap::new();
+        subs.insert(s1, ConditionExpression::constant(true));
+        subs.insert(s2, ConditionExpression::constant(false));
+
+        let result = expr.substitute_many(&subs);
+        assert_eq!(result.to_string(), "and(c(v),c(f),3)");
+    }
+
+    #[test]
+    fn test_substitute_many_nested() {
+        use std::collections::BTreeMap;
+
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(s2.clone()),
+            ]),
+            ConditionExpression::negation(ConditionExpression::statement(s3.clone())),
+        ]);
+
+        let mut subs = BTreeMap::new();
+        subs.insert(s1, ConditionExpression::statement(Statement::from(10)));
+        subs.insert(s3, ConditionExpression::statement(Statement::from(30)));
+
+        let result = expr.substitute_many(&subs);
+        assert_eq!(result.to_string(), "or(and(10,2),neg(30))");
+    }
+
+    #[test]
+    fn test_substitute_many_all_occurrences() {
+        use std::collections::BTreeMap;
+
+        let s1 = Statement::from(1);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s1.clone()),
+        ]);
+
+        let mut subs = BTreeMap::new();
+        subs.insert(s1, ConditionExpression::constant(true));
+
+        let result = expr.substitute_many(&subs);
+        assert_eq!(result.to_string(), "and(c(v),c(v),c(v))");
+    }
+
+    #[test]
+    fn test_substitute_many_complex_replacement() {
+        use std::collections::BTreeMap;
+
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1.clone()),
+            ConditionExpression::statement(s2.clone()),
+        ]);
+
+        let mut subs = BTreeMap::new();
+        subs.insert(
+            s1,
+            ConditionExpression::or(&[
+                ConditionExpression::statement(Statement::from(3)),
+                ConditionExpression::statement(Statement::from(4)),
+            ]),
+        );
+
+        let result = expr.substitute_many(&subs);
+        assert_eq!(result.to_string(), "and(or(3,4),2)");
+    }
+
+    #[test]
+    fn test_substitute_many_no_match() {
+        use std::collections::BTreeMap;
+
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(s1),
+            ConditionExpression::statement(s2),
+        ]);
+
+        let mut subs = BTreeMap::new();
+        subs.insert(s3, ConditionExpression::constant(true));
+
+        let result = expr.substitute_many(&subs);
+        assert_eq!(result, expr);
+    }
+
+    #[test]
+    fn test_substitute_many_all_operators() {
+        use std::collections::BTreeMap;
+
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        let expr = ConditionExpression::implication(
+            ConditionExpression::equivalence(
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(s2.clone()),
+            ),
+            ConditionExpression::exclusive_or(
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(s2.clone()),
+            ),
+        );
+
+        let mut subs = BTreeMap::new();
+        subs.insert(s1, ConditionExpression::statement(Statement::from(10)));
+        subs.insert(s2, ConditionExpression::statement(Statement::from(20)));
+
+        let result = expr.substitute_many(&subs);
+        assert_eq!(result.to_string(), "imp(iff(10,20),xor(10,20))");
+    }
+
+    // Tests for has_non_binary_operators
+
+    #[test]
+    fn test_has_non_binary_operators_constant() {
+        let expr = ConditionExpression::constant(true);
+        assert!(!expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_statement() {
+        let expr = ConditionExpression::statement(Statement::from(1));
+        assert!(!expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_negation_binary() {
+        let expr = ConditionExpression::negation(ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+        ]));
+        assert!(!expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_negation_non_binary() {
+        let expr = ConditionExpression::negation(ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+            ConditionExpression::statement(Statement::from(3)),
+        ]));
+        assert!(expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_binary_and() {
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+        ]);
+        assert!(!expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_ternary_and() {
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+            ConditionExpression::statement(Statement::from(3)),
+        ]);
+        assert!(expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_unary_and() {
+        let expr = ConditionExpression::and(&[ConditionExpression::statement(Statement::from(1))]);
+        assert!(expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_empty_and() {
+        let expr = ConditionExpression::and(&[]);
+        assert!(expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_binary_or() {
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+        ]);
+        assert!(!expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_ternary_or() {
+        let expr = ConditionExpression::or(&[
+            ConditionExpression::statement(Statement::from(1)),
+            ConditionExpression::statement(Statement::from(2)),
+            ConditionExpression::statement(Statement::from(3)),
+        ]);
+        assert!(expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_implication_binary() {
+        let expr = ConditionExpression::implication(
+            ConditionExpression::and(&[
+                ConditionExpression::statement(Statement::from(1)),
+                ConditionExpression::statement(Statement::from(2)),
+            ]),
+            ConditionExpression::statement(Statement::from(3)),
+        );
+        assert!(!expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_implication_non_binary() {
+        let expr = ConditionExpression::implication(
+            ConditionExpression::and(&[
+                ConditionExpression::statement(Statement::from(1)),
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+            ]),
+            ConditionExpression::statement(Statement::from(4)),
+        );
+        assert!(expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_nested() {
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::or(&[
+                ConditionExpression::statement(Statement::from(1)),
+                ConditionExpression::statement(Statement::from(2)),
+            ]),
+            ConditionExpression::statement(Statement::from(3)),
+        ]);
+        assert!(!expr.has_non_binary_operators());
+    }
+
+    #[test]
+    fn test_has_non_binary_operators_deeply_nested_non_binary() {
+        let expr = ConditionExpression::and(&[
+            ConditionExpression::or(&[
+                ConditionExpression::statement(Statement::from(1)),
+                ConditionExpression::statement(Statement::from(2)),
+                ConditionExpression::statement(Statement::from(3)),
+            ]),
+            ConditionExpression::statement(Statement::from(4)),
+        ]);
+        assert!(expr.has_non_binary_operators());
     }
 }

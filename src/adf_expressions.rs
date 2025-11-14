@@ -367,9 +367,166 @@ impl AdfExpressions {
     pub fn binarize_operators(&mut self) {
         for (_, condition) in self.conditions.iter_mut() {
             if let Some(cond) = condition {
-                *cond = cond.binarize();
+                // Optimization: only binarize if expression has non-binary operators
+                if cond.has_non_binary_operators() {
+                    *cond = cond.binarize();
+                }
             }
         }
+    }
+
+    /// Build a dependency map showing which statements are referenced in each condition.
+    ///
+    /// Returns a map where the key is a statement that has a condition, and the value
+    /// is a set of statements that appear in that condition.
+    ///
+    /// This is useful for optimizing operations that need to know which conditions
+    /// reference which statements.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{AdfExpressions, ConditionExpression, Statement};
+    /// let mut adf = AdfExpressions::new();
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    /// let s3 = Statement::from(3);
+    ///
+    /// // ac(1, and(2, 3))
+    /// adf.add_condition(s1.clone(), ConditionExpression::and(&[
+    ///     ConditionExpression::statement(s2.clone()),
+    ///     ConditionExpression::statement(s3.clone()),
+    /// ])).unwrap();
+    ///
+    /// let deps = adf.build_dependency_map();
+    /// let s1_deps = deps.get(&s1).unwrap();
+    /// assert!(s1_deps.contains(&s2));
+    /// assert!(s1_deps.contains(&s3));
+    /// ```
+    pub fn build_dependency_map(
+        &self,
+    ) -> BTreeMap<Statement, std::collections::BTreeSet<Statement>> {
+        let mut dep_map = BTreeMap::new();
+
+        for (statement, condition) in &self.conditions {
+            if let Some(cond) = condition {
+                let statements = cond.collect_statements();
+                dep_map.insert(statement.clone(), statements.into_iter().collect());
+            }
+        }
+
+        dep_map
+    }
+
+    /// Rename multiple statements throughout the entire ADF using a map.
+    ///
+    /// This method renames multiple statements both in the statement list and in all conditions
+    /// in a single pass. This is more efficient than calling `rename_statement` multiple times.
+    ///
+    /// For each entry in the map:
+    /// - The old statement is removed from the statement list
+    /// - The new statement is added to the statement list  
+    /// - If the old statement had a condition, it's moved to the new statement
+    /// - All occurrences of old statements in conditions are replaced with new statements
+    ///
+    /// # Arguments
+    ///
+    /// * `renamings` - A map from old statement names to new statement names
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if:
+    /// - Any old statement doesn't exist in the ADF
+    /// - Any new statement already exists in the ADF (and is not being renamed)
+    /// - The renaming would create conflicts (e.g., swapping two statements)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use biodivine_adf_solver::{AdfExpressions, ConditionExpression, Statement};
+    /// # use std::collections::BTreeMap;
+    /// let mut adf = AdfExpressions::new();
+    /// let s1 = Statement::from(1);
+    /// let s2 = Statement::from(2);
+    /// let s3 = Statement::from(3);
+    ///
+    /// // Add conditions
+    /// adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone())).unwrap();
+    /// adf.add_condition(s2.clone(), ConditionExpression::statement(s3.clone())).unwrap();
+    /// adf.add_statement(s3.clone());
+    ///
+    /// // Rename: 1->10, 2->20, 3->30
+    /// let mut renamings = BTreeMap::new();
+    /// renamings.insert(s1.clone(), Statement::from(10));
+    /// renamings.insert(s2.clone(), Statement::from(20));
+    /// renamings.insert(s3.clone(), Statement::from(30));
+    /// adf.rename_statements(&renamings).unwrap();
+    ///
+    /// // Original statements are gone, new ones exist
+    /// assert!(!adf.has_statement(&s1));
+    /// assert!(adf.has_statement(&Statement::from(10)));
+    /// assert_eq!(adf.get_condition(&Statement::from(10)).unwrap().to_string(), "20");
+    /// assert_eq!(adf.get_condition(&Statement::from(20)).unwrap().to_string(), "30");
+    /// ```
+    pub fn rename_statements(
+        &mut self,
+        renamings: &BTreeMap<Statement, Statement>,
+    ) -> Result<(), String> {
+        // Optimization: if map is empty, do nothing
+        if renamings.is_empty() {
+            return Ok(());
+        }
+
+        // Validation: check that all old statements exist
+        for old_stmt in renamings.keys() {
+            if !self.conditions.contains_key(old_stmt) {
+                return Err(format!("Statement {} does not exist in the ADF", old_stmt));
+            }
+        }
+
+        // Validation: check that new statements don't conflict with existing ones
+        // (unless they're being renamed themselves)
+        for new_stmt in renamings.values() {
+            if self.conditions.contains_key(new_stmt) && !renamings.contains_key(new_stmt) {
+                return Err(format!(
+                    "Statement {} already exists in the ADF and is not being renamed",
+                    new_stmt
+                ));
+            }
+        }
+
+        // Build substitution map for conditions
+        let mut substitutions = BTreeMap::new();
+        for (old_stmt, new_stmt) in renamings {
+            substitutions.insert(
+                old_stmt.clone(),
+                ConditionExpression::statement(new_stmt.clone()),
+            );
+        }
+
+        // Apply substitutions to all conditions
+        for (_, condition) in self.conditions.iter_mut() {
+            if let Some(cond) = condition {
+                *cond = cond.substitute_many(&substitutions);
+            }
+        }
+
+        // Rename statements in the statement list
+        // Collect old conditions first to avoid borrowing issues
+        let old_conditions: Vec<_> = renamings
+            .keys()
+            .map(|old_stmt| (old_stmt.clone(), self.conditions.remove(old_stmt)))
+            .collect();
+
+        // Insert with new names
+        for (old_stmt, old_condition) in old_conditions {
+            if let Some(new_stmt) = renamings.get(&old_stmt) {
+                self.conditions
+                    .insert(new_stmt.clone(), old_condition.flatten());
+            }
+        }
+
+        Ok(())
     }
 
     /// Rename a statement throughout the entire ADF.
@@ -2034,6 +2191,177 @@ ac(2, or(1, 3)).
         );
     }
 
+    // Tests for build_dependency_map
+
+    #[test]
+    fn test_build_dependency_map_empty() {
+        let adf = AdfExpressions::new();
+        let deps = adf.build_dependency_map();
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_build_dependency_map_simple() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // ac(1, and(2, 3))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s2.clone()),
+                ConditionExpression::statement(s3.clone()),
+            ]),
+        )
+        .unwrap();
+
+        let deps = adf.build_dependency_map();
+        assert_eq!(deps.len(), 1);
+
+        let s1_deps = deps.get(&s1).unwrap();
+        assert_eq!(s1_deps.len(), 2);
+        assert!(s1_deps.contains(&s2));
+        assert!(s1_deps.contains(&s3));
+    }
+
+    #[test]
+    fn test_build_dependency_map_no_dependencies() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, c(v))
+        adf.add_condition(s1.clone(), ConditionExpression::constant(true))
+            .unwrap();
+
+        let deps = adf.build_dependency_map();
+        let s1_deps = deps.get(&s1).unwrap();
+        assert!(s1_deps.is_empty());
+    }
+
+    #[test]
+    fn test_build_dependency_map_self_reference() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, neg(1))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::negation(ConditionExpression::statement(s1.clone())),
+        )
+        .unwrap();
+
+        let deps = adf.build_dependency_map();
+        let s1_deps = deps.get(&s1).unwrap();
+        assert_eq!(s1_deps.len(), 1);
+        assert!(s1_deps.contains(&s1));
+    }
+
+    #[test]
+    fn test_build_dependency_map_multiple_conditions() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // ac(1, 2)
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+        // ac(2, or(1, 3))
+        adf.add_condition(
+            s2.clone(),
+            ConditionExpression::or(&[
+                ConditionExpression::statement(s1.clone()),
+                ConditionExpression::statement(s3.clone()),
+            ]),
+        )
+        .unwrap();
+
+        let deps = adf.build_dependency_map();
+        assert_eq!(deps.len(), 2);
+
+        let s1_deps = deps.get(&s1).unwrap();
+        assert_eq!(s1_deps.len(), 1);
+        assert!(s1_deps.contains(&s2));
+
+        let s2_deps = deps.get(&s2).unwrap();
+        assert_eq!(s2_deps.len(), 2);
+        assert!(s2_deps.contains(&s1));
+        assert!(s2_deps.contains(&s3));
+    }
+
+    #[test]
+    fn test_build_dependency_map_free_statements_excluded() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        adf.add_statement(s1.clone());
+        adf.add_condition(s2.clone(), ConditionExpression::statement(s3.clone()))
+            .unwrap();
+
+        let deps = adf.build_dependency_map();
+        // s1 has no condition, so it shouldn't be in the map
+        assert!(!deps.contains_key(&s1));
+        assert!(deps.contains_key(&s2));
+    }
+
+    #[test]
+    fn test_build_dependency_map_complex_nested() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, imp(and(2, 3), or(4, 5)))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::implication(
+                ConditionExpression::and(&[
+                    ConditionExpression::statement(Statement::from(2)),
+                    ConditionExpression::statement(Statement::from(3)),
+                ]),
+                ConditionExpression::or(&[
+                    ConditionExpression::statement(Statement::from(4)),
+                    ConditionExpression::statement(Statement::from(5)),
+                ]),
+            ),
+        )
+        .unwrap();
+
+        let deps = adf.build_dependency_map();
+        let s1_deps = deps.get(&s1).unwrap();
+        assert_eq!(s1_deps.len(), 4);
+        assert!(s1_deps.contains(&Statement::from(2)));
+        assert!(s1_deps.contains(&Statement::from(3)));
+        assert!(s1_deps.contains(&Statement::from(4)));
+        assert!(s1_deps.contains(&Statement::from(5)));
+    }
+
+    #[test]
+    fn test_build_dependency_map_duplicates_removed() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        // ac(1, or(2, 2, 2))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::or(&[
+                ConditionExpression::statement(s2.clone()),
+                ConditionExpression::statement(s2.clone()),
+                ConditionExpression::statement(s2.clone()),
+            ]),
+        )
+        .unwrap();
+
+        let deps = adf.build_dependency_map();
+        let s1_deps = deps.get(&s1).unwrap();
+        // Duplicates should be removed (BTreeSet)
+        assert_eq!(s1_deps.len(), 1);
+        assert!(s1_deps.contains(&s2));
+    }
+
     // Tests for binarize_operators
 
     #[test]
@@ -2320,6 +2648,248 @@ ac(2, or(1, 3, 4, 5)).
         assert_eq!(
             adf2.get_condition(&Statement::from(2)).unwrap().to_string(),
             "or(or(or(1,3),4),5)"
+        );
+    }
+
+    // Tests for rename_statements
+
+    #[test]
+    fn test_rename_statements_empty_map() {
+        let mut adf = AdfExpressions::new();
+        adf.add_statement(Statement::from(1));
+
+        let renamings = BTreeMap::new();
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_ok());
+        assert!(adf.has_statement(&Statement::from(1)));
+    }
+
+    #[test]
+    fn test_rename_statements_single() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        adf.add_statement(s1.clone());
+
+        let mut renamings = BTreeMap::new();
+        renamings.insert(s1.clone(), Statement::from(10));
+
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_ok());
+        assert!(!adf.has_statement(&s1));
+        assert!(adf.has_statement(&Statement::from(10)));
+    }
+
+    #[test]
+    fn test_rename_statements_multiple() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+        adf.add_condition(s2.clone(), ConditionExpression::statement(s3.clone()))
+            .unwrap();
+        adf.add_statement(s3.clone());
+
+        let mut renamings = BTreeMap::new();
+        renamings.insert(s1.clone(), Statement::from(10));
+        renamings.insert(s2.clone(), Statement::from(20));
+        renamings.insert(s3.clone(), Statement::from(30));
+
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_ok());
+
+        // Old statements should be gone
+        assert!(!adf.has_statement(&s1));
+        assert!(!adf.has_statement(&s2));
+        assert!(!adf.has_statement(&s3));
+
+        // New statements should exist
+        assert!(adf.has_statement(&Statement::from(10)));
+        assert!(adf.has_statement(&Statement::from(20)));
+        assert!(adf.has_statement(&Statement::from(30)));
+
+        // Conditions should be updated
+        assert_eq!(
+            adf.get_condition(&Statement::from(10)).unwrap().to_string(),
+            "20"
+        );
+        assert_eq!(
+            adf.get_condition(&Statement::from(20)).unwrap().to_string(),
+            "30"
+        );
+    }
+
+    #[test]
+    fn test_rename_statements_complex_conditions() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+        let s3 = Statement::from(3);
+
+        // ac(1, and(2, 3, 2))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::and(&[
+                ConditionExpression::statement(s2.clone()),
+                ConditionExpression::statement(s3.clone()),
+                ConditionExpression::statement(s2.clone()),
+            ]),
+        )
+        .unwrap();
+        // Add s2 and s3 as free statements
+        adf.add_statement(s2.clone());
+        adf.add_statement(s3.clone());
+
+        let mut renamings = BTreeMap::new();
+        renamings.insert(s2.clone(), Statement::from(20));
+        renamings.insert(s3.clone(), Statement::from(30));
+
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_ok());
+
+        // All occurrences should be replaced
+        assert_eq!(adf.get_condition(&s1).unwrap().to_string(), "and(20,30,20)");
+    }
+
+    #[test]
+    fn test_rename_statements_nonexistent_fails() {
+        let mut adf = AdfExpressions::new();
+        adf.add_statement(Statement::from(1));
+
+        let mut renamings = BTreeMap::new();
+        renamings.insert(Statement::from(99), Statement::from(100));
+
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_rename_statements_conflict_fails() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        adf.add_statement(s1.clone());
+        adf.add_statement(s2.clone());
+
+        // Try to rename s1 to s2 (which already exists)
+        let mut renamings = BTreeMap::new();
+        renamings.insert(s1, s2);
+
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn test_rename_statements_swap_allowed() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        adf.add_condition(s1.clone(), ConditionExpression::statement(s2.clone()))
+            .unwrap();
+        adf.add_condition(s2.clone(), ConditionExpression::statement(s1.clone()))
+            .unwrap();
+
+        // Swap: 1->2, 2->1
+        let mut renamings = BTreeMap::new();
+        renamings.insert(s1.clone(), s2.clone());
+        renamings.insert(s2.clone(), s1.clone());
+
+        let result = adf.rename_statements(&renamings);
+        // This should be allowed since both are being renamed
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_rename_statements_preserves_free_statements() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+        let s2 = Statement::from(2);
+
+        adf.add_statement(s1.clone());
+        adf.add_statement(s2.clone());
+
+        let mut renamings = BTreeMap::new();
+        renamings.insert(s1, Statement::from(10));
+
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_ok());
+
+        // s10 should be free
+        assert!(adf.get_condition(&Statement::from(10)).is_none());
+        // s2 should still exist
+        assert!(adf.has_statement(&s2));
+    }
+
+    #[test]
+    fn test_rename_statements_with_self_reference() {
+        let mut adf = AdfExpressions::new();
+        let s1 = Statement::from(1);
+
+        // ac(1, neg(1))
+        adf.add_condition(
+            s1.clone(),
+            ConditionExpression::negation(ConditionExpression::statement(s1.clone())),
+        )
+        .unwrap();
+
+        let mut renamings = BTreeMap::new();
+        renamings.insert(s1, Statement::from(10));
+
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_ok());
+
+        // ac(10, neg(10))
+        assert_eq!(
+            adf.get_condition(&Statement::from(10)).unwrap().to_string(),
+            "neg(10)"
+        );
+    }
+
+    #[test]
+    fn test_rename_statements_parse_roundtrip() {
+        let input = r#"
+s(1).
+s(2).
+s(3).
+ac(1, and(2, 3)).
+ac(2, or(1, 3)).
+"#;
+        let mut adf = AdfExpressions::parse(input).unwrap();
+
+        let mut renamings = BTreeMap::new();
+        renamings.insert(Statement::from(1), Statement::from(10));
+        renamings.insert(Statement::from(2), Statement::from(20));
+        renamings.insert(Statement::from(3), Statement::from(30));
+
+        let result = adf.rename_statements(&renamings);
+        assert!(result.is_ok());
+
+        // Write and reparse
+        let output = adf.write();
+        let adf2 = AdfExpressions::parse(&output).unwrap();
+
+        // Should be equal
+        assert_eq!(adf, adf2);
+
+        // Verify the renaming
+        assert_eq!(
+            adf2.get_condition(&Statement::from(10))
+                .unwrap()
+                .to_string(),
+            "and(20,30)"
+        );
+        assert_eq!(
+            adf2.get_condition(&Statement::from(20))
+                .unwrap()
+                .to_string(),
+            "or(10,30)"
         );
     }
 
