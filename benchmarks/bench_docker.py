@@ -7,6 +7,8 @@ import subprocess
 import datetime
 import csv
 import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Configuration ---
 # The path inside the container where the host's CWD will be mounted.
@@ -71,6 +73,139 @@ def sanitize_for_container_name(name):
     name = re.sub(r'[^a-zA-Z0-9_.-]', '_', name)
     return name
 
+def process_single_file(
+    filename,
+    file_index,
+    total_files,
+    timestamp,
+    args,
+    pass_through_args,
+    host_cwd,
+    output_dir,
+    running_containers,
+    containers_lock,
+    print_lock
+):
+    """
+    Process a single benchmark file. Returns a dict with results.
+    
+    Args:
+        filename: Name of the benchmark file
+        file_index: Index of the file (0-based) for progress display
+        total_files: Total number of files being processed
+        timestamp: Timestamp string for unique container naming
+        args: Parsed command line arguments
+        pass_through_args: Arguments to pass to the benchmark script
+        host_cwd: Absolute path of the host's current working directory
+        output_dir: Directory where output files are stored
+        running_containers: Set of currently running container names (thread-safe)
+        containers_lock: Lock for accessing running_containers
+        print_lock: Lock for thread-safe printing
+        
+    Returns:
+        dict: Contains 'filename', 'status', 'runtime', 'memory', 'exit_code'
+    """
+    
+    # --- Unique Container Name ---
+    sanitized_filename = sanitize_for_container_name(os.path.splitext(filename)[0])
+    container_name = f"benchmark-{timestamp}-{sanitized_filename}"
+    
+    # --- Path Translation ---
+    def to_container_path(host_path):
+        abs_host_path = os.path.abspath(host_path)
+        relative_path = os.path.relpath(abs_host_path, host_cwd)
+        return os.path.join(CONTAINER_WORK_DIR, relative_path)
+    
+    container_instance_path = to_container_path(os.path.join(args.folder, filename))
+    if args.user_script:
+        container_script_path = to_container_path(args.user_script)
+    else:
+        container_script_path = args.docker_script
+    container_log_path = to_container_path(os.path.join(output_dir, f"{filename}.log"))
+    container_stats_path = to_container_path(os.path.join(output_dir, f"{filename}.stats"))
+    
+    # Host path for parsing the stats file after the run
+    host_stats_path = os.path.join(output_dir, f"{filename}.stats")
+    
+    # --- Command Construction ---
+    inner_cmd = get_inner_benchmark_command(
+        container_script_path,
+        pass_through_args,
+        container_instance_path
+    )
+    
+    container_shell_cmd = (
+        f'/usr/bin/time -f "%e,%M,%x" -o {container_stats_path} '
+        f'timeout {args.timeout} {" ".join(inner_cmd)} '
+        f'> {container_log_path} 2>&1'
+    )
+    
+    docker_cmd = [
+        'docker', 'run',
+        '--rm',
+        '--init',
+        '--name', container_name,
+        '-v', f'{host_cwd}:{CONTAINER_WORK_DIR}',
+        '-w', CONTAINER_WORK_DIR,
+        args.docker_image,
+        '/bin/sh', '-c', container_shell_cmd
+    ]
+    
+    with print_lock:
+        print(f"[{file_index+1}/{total_files}] Running {filename}...", end=" ", flush=True)
+    
+    status = "UNKNOWN"
+    runtime = 0
+    memory = 0
+    exit_code = 0
+    
+    try:
+        # Register this container as running
+        with containers_lock:
+            running_containers.add(container_name)
+        
+        # Use Popen to get control over the running process
+        proc = subprocess.Popen(docker_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.wait()
+        
+        # Unregister the container
+        with containers_lock:
+            running_containers.discard(container_name)
+        
+        # Parse results
+        stats = parse_time_output(host_stats_path)
+        runtime = stats['time']
+        memory = stats['memory']
+        exit_code = int(stats['exit_code'])
+        
+        if exit_code == 124:
+            status = "TIMEOUT"
+            with print_lock:
+                print(f"-> TIMEOUT ({runtime}s)")
+        elif exit_code == 0:
+            status = "OK"
+            with print_lock:
+                print(f"-> OK ({runtime}s)")
+        else:
+            status = "ERROR"
+            with print_lock:
+                print(f"-> ERROR (Code: {exit_code})")
+    
+    except Exception as e:
+        with containers_lock:
+            running_containers.discard(container_name)
+        with print_lock:
+            print(f"\n[ERROR] Docker execution failed: {e}")
+        status = "SYSTEM_ERROR"
+    
+    return {
+        'filename': filename,
+        'status': status,
+        'runtime': runtime,
+        'memory': memory,
+        'exit_code': exit_code
+    }
+
 def main():
     parser = argparse.ArgumentParser(
         description="Automated Benchmark Runner using Docker",
@@ -86,6 +221,7 @@ def main():
     parser.add_argument('--match', help="Only consider files matching this regular expression")
     parser.add_argument('--docker-script', help="Path to the benchmark script/binary in the docker container; Defaults to `/run.sh`.")
     parser.add_argument('--user-script', help="Path to the benchmark script/binary relative to CWD. User script and docker script cannot be set at the same time.")
+    parser.add_argument('--parallel', type=int, default=1, help="Number of parallel benchmark instances to run (default: 1)")
     
     # Catch-all for arguments to be passed to the benchmark script
     parser.add_argument('script_args', nargs=argparse.REMAINDER, help="Arguments passed to the benchmark script")
@@ -101,6 +237,10 @@ def main():
 
     if not args.docker_script and not args.user_script:
         args.docker_script = "/run.sh"
+    
+    if args.parallel < 1:
+        print(f"[FATAL] --parallel must be at least 1.")
+        sys.exit(1)
 
     pass_through_args = args.script_args
     if pass_through_args and pass_through_args[0] == '--':
@@ -136,6 +276,7 @@ def main():
     print(f"[INFO] Found {len(files)} instances to process.")
     print(f"[INFO] Docker image: {args.docker_image}")
     print(f"[INFO] Timeout set to: {args.timeout}")
+    print(f"[INFO] Parallel jobs: {args.parallel}")
     print(f"[INFO] Benchmark script: { args.docker_script if args.user_script is None else args.user_script }")
     if pass_through_args:
         print(f"[INFO] Extra args: {' '.join(pass_through_args)}")
@@ -144,115 +285,86 @@ def main():
     csv_path = os.path.join(output_dir, "__results.csv")
     csv_header = ["Instance", "Status", "Runtime_sec", "Memory_KB", "ExitCode"]
     host_cwd = os.path.abspath(os.getcwd())
+    
+    # Thread-safety mechanisms
+    running_containers = set()
+    containers_lock = threading.Lock()
+    csv_lock = threading.Lock()
+    print_lock = threading.Lock()
 
-    # 4. Processing Loop
+    # 4. Processing Loop with Parallel Execution
     try:
         with open(csv_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(csv_header)
+            csvfile.flush()
             
-            for i, filename in enumerate(files):
-                print(f"[{i+1}/{len(files)}] Running {filename}...", end=" ", flush=True)
-
-                # --- Unique Container Name ---
-                sanitized_filename = sanitize_for_container_name(os.path.splitext(filename)[0])
-                container_name = f"benchmark-{timestamp}-{sanitized_filename}"
-
-                # --- Path Translation ---
-                # All paths must be relative to the CWD to work with the volume mount.
-                # We convert to absolute paths first, then get the relative path to CWD.
-                # This makes the script robust to how paths are provided.
-                def to_container_path(host_path):
-                    abs_host_path = os.path.abspath(host_path)
-                    relative_path = os.path.relpath(abs_host_path, host_cwd)
-                    return os.path.join(CONTAINER_WORK_DIR, relative_path)
-
-                container_instance_path = to_container_path(os.path.join(args.folder, filename))
-                if args.user_script:
-                    container_script_path = to_container_path(args.user_script)
-                else:
-                    container_script_path = args.docker_script
-                container_log_path = to_container_path(os.path.join(output_dir, f"{filename}.log"))
-                container_stats_path = to_container_path(os.path.join(output_dir, f"{filename}.stats"))
+            # Use ThreadPoolExecutor for parallel execution
+            with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+                # Submit all jobs
+                future_to_file = {}
+                for i, filename in enumerate(files):
+                    future = executor.submit(
+                        process_single_file,
+                        filename=filename,
+                        file_index=i,
+                        total_files=len(files),
+                        timestamp=timestamp,
+                        args=args,
+                        pass_through_args=pass_through_args,
+                        host_cwd=host_cwd,
+                        output_dir=output_dir,
+                        running_containers=running_containers,
+                        containers_lock=containers_lock,
+                        print_lock=print_lock
+                    )
+                    future_to_file[future] = filename
                 
-                # Host path for parsing the stats file after the run
-                host_stats_path = os.path.join(output_dir, f"{filename}.stats")
-
-                # --- Command Construction ---
-                inner_cmd = get_inner_benchmark_command(
-                    container_script_path, 
-                    pass_through_args, 
-                    container_instance_path
-                )
-
-                # Command to run INSIDE the container, with output redirected to the log file.
-                # Note: We must use a shell (`/bin/sh -c "..."`) to handle the redirection `>` correctly.
-                container_shell_cmd = (
-                    f'/usr/bin/time -f "%e,%M,%x" -o {container_stats_path} '
-                    f'timeout {args.timeout} {" ".join(inner_cmd)} '
-                    f'> {container_log_path} 2>&1'
-                )
-
-                docker_cmd = [
-                    'docker', 'run',
-                    '--rm',  # Clean up the container after it exits
-                    '--init', # Run with minimal "init" environment that cleans up zombie processes
-                    '--name', container_name, # Assign a name for cleanup
-                    '-v', f'{host_cwd}:{CONTAINER_WORK_DIR}', # Mount CWD
-                    '-w', CONTAINER_WORK_DIR, # Set working directory
-                    args.docker_image,
-                    '/bin/sh', '-c', container_shell_cmd
-                ]
-
-                proc = None
-                status = "UNKNOWN"
-                try:
-                    # Use Popen to get control over the running process
-                    proc = subprocess.Popen(docker_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    proc.wait() # Wait for the docker client process to finish
-                
-                except KeyboardInterrupt:
-                    print("\n[INFO] Interruption detected. Stopping Docker container...", end="", flush=True)
-                    # Use `docker stop` which sends SIGTERM, then SIGKILL. It's cleaner.
-                    # The container will be auto-removed because of the `--rm` flag.
-                    subprocess.run(['docker', 'stop', container_name], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    print(f" stopped.")
-                    # Re-raise the exception to terminate the whole script gracefully
-                    raise
-                
-                runtime = 0
-                memory = 0
-                exit_code = 0
-
-                try:                                    
-                    stats = parse_time_output(host_stats_path)
-                    runtime = stats['time']
-                    memory = stats['memory']
-                    exit_code = int(stats['exit_code'])
+                # Process completed jobs as they finish
+                for future in as_completed(future_to_file):
+                    try:
+                        result = future.result()
+                        
+                        # Write result to CSV in a thread-safe manner
+                        with csv_lock:
+                            writer.writerow([
+                                result['filename'],
+                                result['status'],
+                                result['runtime'],
+                                result['memory'],
+                                result['exit_code']
+                            ])
+                            csvfile.flush()
                     
-                    if exit_code == 124:
-                        status = "TIMEOUT"
-                        print(f"-> TIMEOUT ({runtime}s)")
-                    elif exit_code == 0:
-                        status = "OK"
-                        print(f"-> OK ({runtime}s)")
-                    else:
-                        status = "ERROR"
-                        print(f"-> ERROR (Code: {exit_code})")
-
-                except Exception as e:
-                    print(f"\n[ERROR] Docker execution failed: {e}")
-                    status = "SYSTEM_ERROR"
-
-                # For the sake of completeness, we are also keeping the stats files.
-                # if os.path.exists(host_stats_path):
-                #     os.remove(host_stats_path)
-
-                writer.writerow([filename, status, runtime, memory, exit_code])
-                csvfile.flush()
+                    except Exception as e:
+                        filename = future_to_file[future]
+                        with print_lock:
+                            print(f"\n[ERROR] Unexpected error processing {filename}: {e}")
+                        with csv_lock:
+                            writer.writerow([filename, "SYSTEM_ERROR", 0, 0, -1])
+                            csvfile.flush()
 
     except KeyboardInterrupt:
-        print("\n[INFO] Benchmark interrupted by user. Exiting...")
+        print("\n[INFO] Benchmark interrupted by user. Stopping all running containers...")
+        
+        # Get a snapshot of running containers
+        with containers_lock:
+            containers_to_stop = list(running_containers)
+        
+        # Stop all running containers
+        for container_name in containers_to_stop:
+            try:
+                subprocess.run(
+                    ['docker', 'stop', container_name],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5
+                )
+            except Exception:
+                pass  # Best effort cleanup
+        
+        print("[INFO] All containers stopped. Exiting...")
         sys.exit(130)
 
     print(f"\n[INFO] Benchmarking complete. Results saved to {csv_path}")
