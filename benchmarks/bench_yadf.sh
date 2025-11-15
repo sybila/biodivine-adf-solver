@@ -9,7 +9,7 @@ mkdir -p ./results
 
 TIMEOUT='10s'
 TOOL='sybila/tool-yadf'
-BENCHMARKS='./test_instances'
+BENCHMARKS='./test_instances/_normalized'
 
 # Time to one solution across various semantics.
 python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.adf' -- -adm 1
