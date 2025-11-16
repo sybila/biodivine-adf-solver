@@ -11,7 +11,7 @@ COPY ./andreasniskanen-k-adf-637c31f2fd4f.zip ./andreasniskanen-k-adf-637c31f2fd
 RUN unzip ./andreasniskanen-k-adf-637c31f2fd4f.zip 
 RUN cd ./andreasniskanen-k-adf-637c31f2fd4f; make
 
-# Stage 2: Actial environment to run k++-ADF
+# Stage 2: Actual environment to run k++-ADF
 FROM debian:trixie AS run-stage
 
 COPY --from=build-stage /sw /sw
