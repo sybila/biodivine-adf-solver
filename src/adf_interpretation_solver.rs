@@ -73,3 +73,77 @@ impl AdfInterpretationSolver {
         Ok(model_set)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bdd_solver::NaiveGreedySolver;
+
+    fn create_test_solver() -> AdfInterpretationSolver {
+        AdfInterpretationSolver::from(NaiveGreedySolver::default())
+    }
+
+    #[test]
+    fn test_solve_simple_adf_constant_true() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            ac(0, c(v)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_complete_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // For statement 0 with constant true condition:
+        // Fixed point: 0 <=> true, which means 0 must be true
+        // So there is exactly 1 interpretation: {0: true}
+        assert_eq!(model_set.model_count(), 1.0);
+    }
+
+    #[test]
+    fn test_solve_two_statements() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            ac(0, 1).
+            ac(1, 0).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_complete_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // For statements with mutual dependencies:
+        // Fixed points: 0 <=> 1 and 1 <=> 0
+        // This means: 0 <=> 1, so both must be true or both must be false
+        // There are 2 interpretations: {0: true, 1: true} and {0: false, 1: false}
+        assert_eq!(model_set.model_count(), 2.0);
+    }
+
+    #[test]
+    fn test_solve_with_free_statement() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            ac(0, c(v)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_complete_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 has condition true, so 0 must be true (fixed point: 0 <=> true)
+        // Statement 1 has no condition (free), so it can be true or false
+        // There are 2 interpretations: {0: true, 1: true} and {0: true, 1: false}
+        assert_eq!(model_set.model_count(), 2.0);
+    }
+}
