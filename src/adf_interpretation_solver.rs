@@ -1,12 +1,23 @@
-use crate::bdd_solver::BddSolver;
+use crate::bdd_solver::{BddSolver, DynamicBddSolver};
 use crate::{AdfBdds, ModelSetTwoValued};
 use cancel_this::{Cancellable, is_cancelled};
 
-pub struct AdfInterpretationSolver<S: BddSolver> {
-    _phantom: std::marker::PhantomData<S>,
+pub struct AdfInterpretationSolver {
+    solver: DynamicBddSolver,
 }
 
-impl<S: BddSolver> AdfInterpretationSolver<S> {
+impl<S: BddSolver + 'static> From<S> for AdfInterpretationSolver {
+    fn from(value: S) -> Self {
+        AdfInterpretationSolver::new(Box::new(value))
+    }
+}
+
+impl AdfInterpretationSolver {
+    /// Create a new `AdfInterpretationSolver` with the given BDD solver.
+    pub fn new(solver: DynamicBddSolver) -> Self {
+        AdfInterpretationSolver { solver }
+    }
+
     /// Computes the [`ModelSetTwoValued`] of all complete two valued interpretations of this ADF.
     pub fn solve_complete_two_valued(&self, adf: &AdfBdds) -> Cancellable<ModelSetTwoValued> {
         let direct = adf.direct_encoding();
@@ -33,7 +44,7 @@ impl<S: BddSolver> AdfInterpretationSolver<S> {
             fixed_point_constraints.push(constraint);
         }
 
-        let result_bdd = S::solve_conjunction(&fixed_point_constraints)?;
+        let result_bdd = self.solver.solve_conjunction(&fixed_point_constraints)?;
 
         Ok(adf.mk_two_valued_set(result_bdd))
     }

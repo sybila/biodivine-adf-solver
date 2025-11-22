@@ -7,10 +7,11 @@ use ruddy::split::Bdd;
 /// The algorithm sorts the BDDs by size and always merges the two smallest ones until
 /// only one remains. This is a simple greedy approach that doesn't require quadratic
 /// comparisons but may not always produce optimal intermediate BDD sizes.
+#[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NaiveGreedySolver;
 
 impl BddSolver for NaiveGreedySolver {
-    fn solve_conjunction(constraints: &[Bdd]) -> Cancellable<Bdd> {
+    fn solve_conjunction(&self, constraints: &[Bdd]) -> Cancellable<Bdd> {
         use cancel_this::is_cancelled;
 
         // Handle edge cases
