@@ -179,7 +179,7 @@ mod tests {
         let var_map = adf.dual_encoding().var_map();
         let s0_positive = var_map.make_positive_literal(&Statement::from(0), true);
         let s0_negative = var_map.make_negative_literal(&Statement::from(0), true);
-        
+
         // Both dual variables true means the statement can be both true and false
         let both_true = s0_positive.and(&s0_negative);
         let valid_bdd = adf.dual_encoding().valid();
