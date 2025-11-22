@@ -10,7 +10,7 @@ use std::sync::Arc;
 ///
 /// It is assumed that the BDD variables follow the natural ordering of the statements, but do not
 /// necessarily need to use the exact same identifiers.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DirectMap {
     mapping: BTreeMap<Statement, VariableId>,
 }
@@ -79,7 +79,7 @@ impl Index<Statement> for DirectMap {
 ///
 /// It is assumed that the BDD variables follow the natural ordering of the statements
 /// (and positive < negative), but do not necessarily need to use the exact same identifiers.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DualMap {
     mapping: BTreeMap<Statement, (VariableId, VariableId)>,
 }
