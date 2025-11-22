@@ -1,4 +1,5 @@
 use crate::adf_bdds::DirectEncoding;
+use crate::model_set::ModelSet;
 use ruddy::split::Bdd;
 use std::sync::Arc;
 
@@ -16,6 +17,16 @@ impl PartialEq for ModelSetTwoValued {
 }
 
 impl Eq for ModelSetTwoValued {}
+
+impl ModelSet for ModelSetTwoValued {
+    fn symbolic_set(&self) -> &Bdd {
+        ModelSetTwoValued::symbolic_set(self)
+    }
+
+    fn model_count(&self) -> f64 {
+        ModelSetTwoValued::model_count(self)
+    }
+}
 
 impl ModelSetTwoValued {
     /// Make a [`ModelSetTwoValued`] from the underlying parts.

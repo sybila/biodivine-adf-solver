@@ -1,4 +1,6 @@
-use crate::{AdfExpressions, ConditionExpression, ModelSetTwoValued, Statement};
+use crate::{
+    AdfExpressions, ConditionExpression, ModelSetThreeValued, ModelSetTwoValued, Statement,
+};
 use cancel_this::{Cancellable, is_cancelled};
 use ruddy::VariableId;
 use ruddy::split::Bdd;
@@ -114,6 +116,13 @@ impl DualMap {
         self.mapping.keys()
     }
 
+    /// Get all [`VariableId`] objects used in the map.
+    ///
+    /// The order of values is not guaranteed.
+    pub fn variable_ids(&self) -> impl DoubleEndedIterator<Item = &VariableId> + '_ {
+        self.mapping.values().flat_map(|(a, b)| [a, b])
+    }
+
     /// Create [`Bdd`] literals for both the positive and negative dual variables.
     ///
     /// Returns a tuple `(positive_literal, negative_literal)` where:
@@ -125,15 +134,15 @@ impl DualMap {
     }
 
     /// Create a [`Bdd`] literal for the positive dual variable (can be true).
-    pub fn make_positive_literal(&self, statement: &Statement) -> Bdd {
+    pub fn make_positive_literal(&self, statement: &Statement, polarity: bool) -> Bdd {
         let (t_var, _) = self[statement];
-        Bdd::new_literal(t_var, true)
+        Bdd::new_literal(t_var, polarity)
     }
 
     /// Create a [`Bdd`] literal for the negative dual variable (can be false).
-    pub fn make_negative_literal(&self, statement: &Statement) -> Bdd {
+    pub fn make_negative_literal(&self, statement: &Statement, polarity: bool) -> Bdd {
         let (_, f_var) = self[statement];
-        Bdd::new_literal(f_var, true)
+        Bdd::new_literal(f_var, polarity)
     }
 }
 
@@ -267,6 +276,42 @@ impl DualEncoding {
     pub fn valid(&self) -> &Bdd {
         &self.valid
     }
+
+    /// Returns true if the given [`Bdd`] only uses variables used by this [`DualMap`],
+    /// and represents a subset of [`Self::valid`].
+    pub fn is_dual_encoded(&self, bdd: &Bdd) -> bool {
+        let used: BTreeSet<VariableId> = bdd.used_variables();
+        let allowed: BTreeSet<VariableId> = self.var_map.variable_ids().copied().collect();
+        // (A is_subset B) == (A => B) == (!A | B)
+        used.is_subset(&allowed) && bdd.not().or(&self.valid).is_true()
+    }
+
+    /// Compute the number of valuations in a "dual encoded" BDD representation of the
+    /// ADF statements.
+    ///
+    /// The given BDD can only use variables of the dual encoding and must not contain
+    /// any valuations that are invalid in the dual encoding.
+    pub fn count_dual_valuations(&self, bdd: &Bdd) -> f64 {
+        assert!(self.is_dual_encoded(bdd));
+
+        // Count the number of "unused variables" that we have in the BDD
+        let statement_count = self.var_map.mapping.len();
+
+        if statement_count == 0 {
+            // For empty ADFs, the result is trivial.
+            return if bdd.is_false() { 0.0 } else { 1.0 };
+        }
+
+        // Each statement maps to 4 variables, which means (starting
+        // from zero), the last variable is 4*x - 1.
+        let max_var = VariableId::new_long((statement_count * 4 - 1) as u64).unwrap();
+        let unused_vars = statement_count * 2;
+
+        // Count valuations and normalize them based on unused variables.
+        let count = bdd.count_satisfying_valuations(Some(max_var));
+
+        count / 2.0f64.powf(unused_vars as f64)
+    }
 }
 
 /// A [`AdfBdds`] encodes an ADF symbolically using BDDs.
@@ -303,8 +348,17 @@ impl AdfBdds {
     }
 
     /// Create a new instance of [`ModelSetTwoValued`] from a "raw" BDD.
+    ///
+    /// The BDD must satisfy [`DirectEncoding::is_direct_encoded`].
     pub fn mk_two_valued_set(&self, bdd: Bdd) -> ModelSetTwoValued {
         ModelSetTwoValued::new(bdd, self.direct_encoding.clone())
+    }
+
+    /// Create a new instance of [`ModelSetThreeValued`] from a "raw" BDD.
+    ///
+    /// The BDD must satisfy [`DualEncoding::is_dual_encoded`].
+    pub fn mk_three_valued_set(&self, bdd: Bdd) -> ModelSetThreeValued {
+        ModelSetThreeValued::new(bdd, self.dual_encoding.clone())
     }
 
     /// Try to create a [`AdfBdds`] from an [`AdfExpressions`].
@@ -637,8 +691,8 @@ mod tests {
         let statements = vec![Statement::from(0)];
         let map = DualMap::new(&statements);
 
-        let t_lit = map.make_positive_literal(&Statement::from(0));
-        let f_lit = map.make_negative_literal(&Statement::from(0));
+        let t_lit = map.make_positive_literal(&Statement::from(0), true);
+        let f_lit = map.make_negative_literal(&Statement::from(0), true);
         let (t_both, f_both) = map.make_literals(&Statement::from(0));
 
         // Individual methods should match get_literals
