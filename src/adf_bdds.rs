@@ -51,6 +51,15 @@ impl DirectMap {
         self.mapping.values()
     }
 
+    /// Return the last [`VariableId`] that is still relevant to this map.
+    ///
+    /// Note that this is mostly internal information for BDD manipulation, and you
+    /// probably should not need to use it directly. Also note that the last valid ID
+    /// does not need to actually encode a variable.
+    pub fn last_valid_variable_id(&self) -> VariableId {
+        VariableId::new_long((self.mapping.len() * 4 - 1) as u64).unwrap()
+    }
+
     /// Create a [`Bdd`] literal for the given [`Statement`].    
     pub fn make_literal(&self, statement: &Statement, polarity: bool) -> Bdd {
         let var = self[statement];
@@ -103,6 +112,14 @@ impl DualMap {
         DualMap { mapping }
     }
 
+    pub fn len(&self) -> usize {
+        self.mapping.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.mapping.is_empty()
+    }
+
     /// Get the BDD [`VariableId`]s (positive, negative) for a [`Statement`].
     pub fn get(&self, statement: &Statement) -> Option<(VariableId, VariableId)> {
         self.mapping.get(statement).copied()
@@ -121,6 +138,23 @@ impl DualMap {
     /// The order of values is not guaranteed.
     pub fn variable_ids(&self) -> impl DoubleEndedIterator<Item = &VariableId> + '_ {
         self.mapping.values().flat_map(|(a, b)| [a, b])
+    }
+
+    /// Get all pairs of variables in the dual encoding that correspond to the individual
+    /// [`Self::statements`].
+    pub fn variable_id_pairs(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &(VariableId, VariableId)> + '_ {
+        self.mapping.values()
+    }
+
+    /// Return the last [`VariableId`] that is still relevant to this map.
+    ///
+    /// Note that this is mostly internal information for BDD manipulation, and you
+    /// probably should not need to use it directly. Also note that the last valid ID
+    /// does not need to actually encode a variable.
+    pub fn last_valid_variable_id(&self) -> VariableId {
+        VariableId::new_long((self.mapping.len() * 4 - 1) as u64).unwrap()
     }
 
     /// Create [`Bdd`] literals for both the positive and negative dual variables.
@@ -312,6 +346,32 @@ impl DualEncoding {
 
         count / 2.0f64.powf(unused_vars as f64)
     }
+
+    /// Extract the valuation with the highest number of fixed variable values (i.e. `01` or `10`
+    /// instead of `11`).
+    ///
+    /// # Panics
+    ///
+    /// The BDD must be using the dual encoding, and it must not be empty.
+    pub fn most_fixed_model(&self, bdd: &Bdd) -> BTreeMap<VariableId, bool> {
+        assert!(self.is_dual_encoded(bdd));
+        assert!(!bdd.is_false());
+
+        let max_var = self.var_map.last_valid_variable_id();
+        // The valuation now also contains other "irrelevant" variables that we need to remove.
+        // These do not influence the optimization process, because they are completely free.
+        // (i.e. they can always be fixed to `false` on all paths)
+        let mut most_false_valuation = bdd.most_negative_valuation(max_var);
+
+        let allowed = self
+            .var_map
+            .variable_ids()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        most_false_valuation.retain(|k, _| allowed.contains(k));
+
+        most_false_valuation
+    }
 }
 
 /// A [`AdfBdds`] encodes an ADF symbolically using BDDs.
@@ -347,6 +407,11 @@ impl AdfBdds {
         &self.dual_encoding
     }
 
+    /// Iterator over all statements of this [`AdfBdds`].
+    pub fn statements(&self) -> impl DoubleEndedIterator<Item = &Statement> {
+        self.direct_encoding().var_map().statements()
+    }
+
     /// Create a new instance of [`ModelSetTwoValued`] from a "raw" BDD.
     ///
     /// The BDD must satisfy [`DirectEncoding::is_direct_encoded`].
@@ -359,6 +424,18 @@ impl AdfBdds {
     /// The BDD must satisfy [`DualEncoding::is_dual_encoded`].
     pub fn mk_three_valued_set(&self, bdd: Bdd) -> ModelSetThreeValued {
         ModelSetThreeValued::new(bdd, self.dual_encoding.clone())
+    }
+
+    /// Instantiate a single thre-valued interpretation into a symbolic set.
+    pub fn mk_three_valued_interpretation(
+        &self,
+        valuation: impl IntoIterator<Item = (VariableId, bool)>,
+    ) -> ModelSetThreeValued {
+        let mut bdd = Bdd::new_false();
+        for (var, value) in valuation {
+            bdd = bdd.and(&Bdd::new_literal(var, value))
+        }
+        self.mk_three_valued_set(bdd)
     }
 
     /// Try to create a [`AdfBdds`] from an [`AdfExpressions`].
@@ -391,8 +468,10 @@ impl AdfBdds {
 
         // Build dual encoding conditions from direct encoding
         let mut dual_conditions = BTreeMap::new();
-        let mapping_function = direct_to_dual_map_function(&direct_map, &dual_map)?;
         for (statement, condition) in direct_conditions.iter() {
+            let mapping_function =
+                direct_to_dual_map_function(&direct_map, &dual_map, &condition.used_variables())?;
+
             let can_be_true = direct_to_dual_encoding(condition, &mapping_function, &direct_map);
             is_cancelled!()?;
             let can_be_false =
@@ -498,11 +577,20 @@ fn expression_to_bdd(expr: &ConditionExpression, var_map: &DirectMap) -> Cancell
 ///
 /// Note that in theory, the ordering of BDD variables can be arbitrary, but the best
 /// result is achieved if the three variables follow each other in the variable ordering.
-fn direct_to_dual_map_function(direct_map: &DirectMap, dual_map: &DualMap) -> Cancellable<Bdd> {
+fn direct_to_dual_map_function(
+    direct_map: &DirectMap,
+    dual_map: &DualMap,
+    variables: &BTreeSet<VariableId>,
+) -> Cancellable<Bdd> {
     let mut mapping_function = Bdd::new_true();
     for statement in direct_map.statements().rev() {
         is_cancelled!()?;
 
+        // Only use variables that are actually used in the condition we are mapping.
+        let d_lit = direct_map[statement];
+        if !variables.contains(&d_lit) {
+            continue;
+        }
         let (t_lit, f_lit) = dual_map.make_literals(statement);
 
         // (direct_var => t_var) & (!direct_var => f_var)
