@@ -194,7 +194,7 @@ impl ModelSetThreeValued {
 
 #[cfg(test)]
 mod tests {
-    use crate::{AdfBdds, Statement};
+    use crate::{AdfBdds, ModelSetThreeValued, Statement};
 
     fn create_test_adf_bdds() -> AdfBdds {
         let adf_str = r#"
@@ -324,5 +324,152 @@ mod tests {
         let count = model_set.model_count();
         assert!(count > 0.0);
         assert!(count.is_finite());
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let adf = create_test_adf_bdds();
+
+        // Empty set should return true
+        let false_bdd = ruddy::split::Bdd::new_false();
+        let empty_set = adf.mk_three_valued_set(false_bdd);
+        assert!(empty_set.is_empty());
+
+        // Non-empty set should return false
+        let valid_bdd = adf.dual_encoding().valid().clone();
+        let non_empty_set = adf.mk_three_valued_set(valid_bdd);
+        assert!(!non_empty_set.is_empty());
+    }
+
+    #[test]
+    fn test_most_fixed_model() {
+        let adf = create_test_adf_bdds();
+        let var_map = adf.dual_encoding().var_map();
+
+        let s0 = Statement::from(0);
+        // Create a set with statement 0 fixed to true
+        let s0_positive = var_map.make_positive_literal(&s0, true);
+        let valid_bdd = adf.dual_encoding().valid();
+        let constraint_bdd = s0_positive.and(valid_bdd);
+        let model_set = adf.mk_three_valued_set(constraint_bdd);
+
+        // Should return a model with fixed values
+        let model = model_set.most_fixed_model();
+        assert!(model.get(&var_map[&s0].0).unwrap());
+        assert!(!model.get(&var_map[&s0].1).unwrap());
+    }
+
+    #[test]
+    fn test_mk_exactly_k_free_statements() {
+        let adf = create_test_adf_bdds();
+
+        // Test with k=0 (no free statements)
+        let set_0_free = ModelSetThreeValued::mk_exactly_k_free_statements(0, &adf);
+        assert!(!set_0_free.is_empty());
+        assert_eq!(set_0_free.model_count(), 4.0);
+
+        // Test with k=1 (exactly one free statement)
+        let set_1_free = ModelSetThreeValued::mk_exactly_k_free_statements(1, &adf);
+        assert!(!set_1_free.is_empty());
+        assert_eq!(set_1_free.model_count(), 4.0);
+
+        // Test with k=2 (exactly two free statements, which is all statements)
+        let set_2_free = ModelSetThreeValued::mk_exactly_k_free_statements(2, &adf);
+        assert!(!set_2_free.is_empty());
+        assert_eq!(set_2_free.model_count(), 1.0);
+
+        // Test with k=3 (more than available statements, should be empty)
+        let set_3_free = ModelSetThreeValued::mk_exactly_k_free_statements(3, &adf);
+        assert!(set_3_free.is_empty());
+    }
+
+    #[test]
+    fn test_intersect() {
+        let adf = create_test_adf_bdds();
+        let var_map = adf.dual_encoding().var_map();
+        let valid_bdd = adf.dual_encoding().valid();
+
+        // Create two sets: one with s0 positive, one with s0 negative
+        let s0_positive = var_map.make_positive_literal(&Statement::from(0), true);
+        let s0_negative = var_map.make_negative_literal(&Statement::from(0), true);
+
+        let set1 = adf.mk_three_valued_set(s0_positive.and(valid_bdd));
+        let set2 = adf.mk_three_valued_set(s0_negative.and(valid_bdd));
+
+        // Intersection should contain models where s0 is both true and false
+        let intersection = set1.intersect(&set2);
+        assert!(!intersection.is_empty());
+
+        // Intersection of a set with itself should be the same set
+        let self_intersection = set1.intersect(&set1);
+        assert_eq!(set1.model_count(), self_intersection.model_count());
+    }
+
+    #[test]
+    fn test_union() {
+        let adf = create_test_adf_bdds();
+        let var_map = adf.dual_encoding().var_map();
+        let valid_bdd = adf.dual_encoding().valid();
+
+        // Create two sets: one with s0 positive, one with s0 negative
+        let s0_positive = var_map.make_positive_literal(&Statement::from(0), true);
+        let s0_negative = var_map.make_negative_literal(&Statement::from(0), true);
+
+        let set1 = adf.mk_three_valued_set(s0_positive.and(valid_bdd));
+        let set2 = adf.mk_three_valued_set(s0_negative.and(valid_bdd));
+
+        // Union should contain models from both sets
+        let union = set1.union(&set2);
+        assert!(!union.is_empty());
+        assert!(union.model_count() >= set1.model_count());
+        assert!(union.model_count() >= set2.model_count());
+
+        // Union of a set with itself should be the same set
+        let self_union = set1.union(&set1);
+        assert_eq!(set1.model_count(), self_union.model_count());
+    }
+
+    #[test]
+    fn test_minus() {
+        let adf = create_test_adf_bdds();
+        let var_map = adf.dual_encoding().var_map();
+        let valid_bdd = adf.dual_encoding().valid();
+
+        // Create a larger set (all valid) and a smaller set (s0 positive)
+        let all_valid = adf.mk_three_valued_set(valid_bdd.clone());
+        let s0_positive = var_map.make_positive_literal(&Statement::from(0), true);
+        let set_with_s0 = adf.mk_three_valued_set(s0_positive.and(valid_bdd));
+
+        // Difference should remove models from the smaller set
+        let difference = all_valid.minus(&set_with_s0);
+        assert!(!difference.is_empty());
+        assert!(difference.model_count() < all_valid.model_count());
+
+        // Difference of a set with itself should be empty
+        let self_difference = set_with_s0.minus(&set_with_s0);
+        assert!(self_difference.is_empty());
+    }
+
+    #[test]
+    fn test_extend_with_looser_models() {
+        let adf = create_test_adf_bdds();
+        let var_map = adf.dual_encoding().var_map();
+        let valid_bdd = adf.dual_encoding().valid();
+
+        // Create a set with statement 0 fixed to true (positive literal only)
+        let s0_positive = var_map.make_positive_literal(&Statement::from(0), true);
+        let original_set = adf.mk_three_valued_set(s0_positive.and(valid_bdd));
+        let original_count = original_set.model_count();
+
+        // Extending should add looser models (where s0 can be free or both)
+        let extended = original_set.extend_with_looser_models();
+        assert!(!extended.is_empty());
+
+        // Extended set should have at least as many models as the original
+        assert!(extended.model_count() >= original_count);
+
+        // The original set should be a subset of the extended set
+        let intersection = original_set.intersect(&extended);
+        assert_eq!(original_set.model_count(), intersection.model_count());
     }
 }
