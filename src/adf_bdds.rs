@@ -427,7 +427,7 @@ impl AdfBdds {
         &self,
         valuation: impl IntoIterator<Item = (VariableId, bool)>,
     ) -> ModelSetThreeValued {
-        let mut bdd = Bdd::new_false();
+        let mut bdd = Bdd::new_true();
         for (var, value) in valuation {
             bdd = bdd.and(&Bdd::new_literal(var, value))
         }
