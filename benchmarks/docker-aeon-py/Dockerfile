@@ -8,7 +8,6 @@ RUN apt-get update && apt install -y --no-install-recommends coreutils time && r
 # Tool-specific dependencies:
 RUN apt-get update && apt install -y --no-install-recommends python3 python3-venv && rm -rf /var/lib/apt/lists/*
 
-# Downloaded from https://sourceforge.net/projects/diamond-adf/
 RUN python3 -m venv ./venv
 RUN /sw/venv/bin/pip install biodivine_aeon==1.2.5
 
