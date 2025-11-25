@@ -32,6 +32,8 @@ fn main() {
     let bn = BooleanNetwork::from(&adf);
 
     std::fs::write(&out_path, bn.to_bnet(true).unwrap()).unwrap();
+    out_path.set_extension("sbml");
+    std::fs::write(&out_path, bn.to_sbml(None)).unwrap();
 }
 
 /// Helper function to estimate the size that the file will eventually have.
