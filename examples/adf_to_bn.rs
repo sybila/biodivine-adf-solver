@@ -29,7 +29,14 @@ fn main() {
         return;
     }
 
-    let bn = BooleanNetwork::from(&adf);
+    let mut bn = BooleanNetwork::from(&adf);
+
+    // Better normalized names for BN formats.
+    for (i, var) in bn.variables().enumerate() {
+        bn.as_graph_mut()
+            .set_variable_name(var, format!("v_{i}").as_str())
+            .unwrap();
+    }
 
     std::fs::write(&out_path, bn.to_bnet(true).unwrap()).unwrap();
     out_path.set_extension("sbml");
