@@ -13,15 +13,15 @@ TIMEOUT=${TIMEOUT:-'10s'}
 PARALLEL=${PARALLEL:-'1'}
 
 # Time to one solution across various semantics.
-python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.sbml' --parallel $PARALLEL -- -r stable BDD
+python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.sbml' --parallel $PARALLEL -- --count-only -r stable BDD
 for d in run_*/; do mv -- "$d" "results/biolqm_2v_${d#./}"; done
 
-python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.sbml' --parallel $PARALLEL -- -r trapspace terminal BDD
+python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.sbml' --parallel $PARALLEL -- --count-only -r trapspace terminal BDD
 for d in run_*/; do mv -- "$d" "results/biolqm_prf_${d#./}"; done
 
-python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.sbml' --parallel $PARALLEL -- -r trapspace tree BDD
+python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.sbml' --parallel $PARALLEL -- --count-only -r trapspace tree BDD
 for d in run_*/; do mv -- "$d" "results/biolqm_com_${d#./}"; done
 
-python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.sbml' --parallel $PARALLEL -- -r trapspace all BDD
+python3 ./benchmarks/bench_docker.py --docker-image $TOOL --timeout $TIMEOUT --folder $BENCHMARKS --match '.*.sbml' --parallel $PARALLEL -- --count-only -r trapspace all BDD
 for d in run_*/; do mv -- "$d" "results/biolqm_adm_${d#./}"; done
 
