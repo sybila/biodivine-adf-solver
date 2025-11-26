@@ -24,8 +24,12 @@ fn main() {
         std::fs::write(
             &out_path,
             format!("Conversion failed. File too large: {total_size}"),
-        )
-        .unwrap();
+        ).unwrap();
+        out_path.set_extension("sbml");
+        std::fs::write(
+            &out_path,
+            format!("Conversion failed. File too large: {total_size}"),
+        ).unwrap();
         return;
     }
 
