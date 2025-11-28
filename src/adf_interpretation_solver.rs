@@ -71,6 +71,174 @@ impl AdfInterpretationSolver {
         Ok(model_set)
     }
 
+    pub fn solve_stable_two_valued(&self, adf: &AdfBdds) -> Cancellable<ModelSetTwoValued> {
+        // 1. Make a copy without free statements (those can be safely fixed to false
+        // for stable models).
+        let adf = &adf.fix_free_statements(false);
+
+        info!(
+            "Starting computation of stable BDD solver by computing all two-valued interpretations."
+        );
+
+        // 2. Compute all two-valued models.
+        let mut remaining = self.solve_complete_two_valued(adf)?;
+
+        info!(
+            "Starting minimization process with {} BDD nodes.",
+            remaining.symbolic_set().node_count()
+        );
+
+        let mut result = adf.mk_two_valued_set(Bdd::new_false());
+
+        // 3. Iteratively refine the candidate set using the models with the least
+        // number of ones.
+        while !remaining.is_empty() {
+            is_cancelled!()?;
+
+            let candidate_model = remaining.most_zero_model();
+
+            // Compute the number of ones in the candidate model:
+            let mut k_one = 0;
+            for var in adf.direct_encoding().var_map().variable_ids() {
+                let t_val = candidate_model.get(var).expect(
+                    "Correctness violation: Candidate model does not cover all statements.",
+                );
+                if *t_val {
+                    k_one += 1;
+                }
+            }
+
+            info!("Current best candidate model has {} ones", k_one);
+
+            // For now, the k-sized BDD is only used for small k due to some inefficiencies
+            // in ruddy that will eventually be fixed.
+            let k_size = if k_one < 10 {
+                ModelSetTwoValued::mk_exactly_k_one_statements(k_one, adf)
+            } else {
+                adf.mk_two_valued_interpretations(candidate_model)
+            };
+
+            let k_candidate = remaining.intersect(&k_size);
+            assert!(!k_candidate.is_empty());
+
+            result = result.union(&k_candidate);
+
+            let looser_models = k_candidate.extend_with_more_ones();
+            remaining = remaining.minus(&looser_models);
+
+            info!(
+                "Remaining set nodes: {}; Result set nodes: {}; Result set paths: {}",
+                remaining.symbolic_set().node_count(),
+                result.symbolic_set().node_count(),
+                result.symbolic_set().count_satisfying_paths(),
+            );
+        }
+
+        info!(
+            "Computed stable model candidates: resulting BDD has {} nodes and {} paths",
+            result.symbolic_set().node_count(),
+            result.symbolic_set().count_satisfying_paths()
+        );
+
+        // 4. If the two-valued model has s=0, set the dual variables to zero as well.
+        // If it is s=1, set dual variables to free.
+        let mut result_bdd = result.symbolic_set().clone();
+
+        for s in adf.statements() {
+            is_cancelled!()?;
+
+            let d_var = adf.direct_encoding().var_map()[s];
+            let (p_var, n_var) = adf.dual_encoding().var_map()[s];
+
+            let d_lit = Bdd::new_literal(d_var, true);
+            let p_lit = Bdd::new_literal(p_var, true);
+            let n_lit = Bdd::new_literal(n_var, true);
+
+            // (!s) => (n & !p)
+            result_bdd = result_bdd.and(&d_lit.not().implies(&n_lit.and(&p_lit.not())));
+            // s => (n & p)
+            result_bdd = result_bdd.and(&d_lit.implies(&n_lit.and(&p_lit)));
+        }
+
+        info!(
+            "Expanded stable model candidates to dual encoding: resulting BDD has {} nodes and {} paths",
+            result_bdd.node_count(),
+            result_bdd.count_satisfying_paths()
+        );
+
+        // 5. Propagate "1" values ("ground") in the 3-valued models encoded in dual encoding.
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+
+            // A variable that is "free" can be fixed to "1" if it cannot be set to "0"
+            // (its negative condition is not satisfied)
+            for s in adf.statements() {
+                is_cancelled!()?;
+
+                let (p_var, n_var) = adf.dual_encoding().var_map()[s];
+                let p_lit = Bdd::new_literal(p_var, true);
+                let n_lit = Bdd::new_literal(n_var, true);
+
+                if let Some((_, n_cond)) = adf.dual_encoding().get_condition(s) {
+                    let has_s_free = result_bdd.and(&p_lit.and(&n_lit));
+                    let cant_go_to_zero = has_s_free.and(&n_cond.not());
+                    // These values can be fixed to 1.
+                    if !cant_go_to_zero.is_false() {
+                        // Subst. s_n=1 for s_n=0
+                        let fixed_to_one = cant_go_to_zero.exists(&[n_var]).and(&n_lit.not());
+                        // Remove those where the value is zero, substitute the ones where value is one.
+                        result_bdd = result_bdd.and(&cant_go_to_zero.not()).or(&fixed_to_one);
+                        changed = true;
+                    }
+                }
+                // else: The condition is an identity, meaning the value stays the same
+            }
+        }
+
+        info!(
+            "Computed grounded model candidates: resulting BDD has {} nodes and {} paths",
+            result.symbolic_set().node_count(),
+            result.symbolic_set().count_satisfying_paths()
+        );
+
+        // 6. Enforce that stable models are only those where non-zero variables grounded to 1.
+
+        for s in adf.statements() {
+            let d_var = adf.direct_encoding().var_map()[s];
+            let (p_var, n_var) = adf.dual_encoding().var_map()[s];
+
+            let d_lit = Bdd::new_literal(d_var, true);
+            let p_lit = Bdd::new_literal(p_var, true);
+            let n_lit = Bdd::new_literal(n_var, true);
+
+            result_bdd = result_bdd.and(&d_lit.implies(&p_lit.and(&n_lit.not())));
+        }
+
+        // Forget about the dual variables
+        result_bdd = result_bdd.exists(
+            &adf.dual_encoding()
+                .var_map()
+                .variable_ids()
+                .copied()
+                .collect::<Vec<_>>(),
+        );
+
+        result = adf.mk_two_valued_set(result_bdd);
+
+        // At this point, the BDD is a relation which maps each 2-valued interpretation to its
+        // 3-valued counterpart with only zeros fixed.
+
+        info!(
+            "Computation complete: resulting BDD has {} nodes and {} paths ",
+            result.symbolic_set().node_count(),
+            result.symbolic_set().count_satisfying_paths(),
+        );
+
+        Ok(result)
+    }
+
     /// Computes the [`ModelSetThreeValued`] of all admissible three valued interpretations of this ADF.
     pub fn solve_admissible(&self, adf: &AdfBdds) -> Cancellable<ModelSetThreeValued> {
         info!("Starting computation of admissible three-valued interpretations");
