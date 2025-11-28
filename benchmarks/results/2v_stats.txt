@@ -1,0 +1,61 @@
+Loading exclude list from ./exclude.txt...
+  Found 72 instances to exclude
+
+Loading result tables from ./2v...
+  Found 8 result tables: fasp, mpbn, bass, aeon, k_adf, adf_obdd, tsconj, biolqm
+
+Processing tables...
+  Row counts after processing: {'fasp': 1165, 'mpbn': 1165, 'bass': 1165, 'aeon': 1165, 'k_adf': 1165, 'adf_obdd': 1165, 'tsconj': 1165, 'biolqm': 1165}
+
+Joining tables...
+  Joined table has 1165 rows and 25 columns
+
+Saving summary to ./2v_summary.csv...
+  Summary saved successfully
+
+Computing statistics...
+
+================================================================================
+STATISTICS
+================================================================================
+
+fasp:
+  OK count: 1123
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 94.56 seconds
+
+mpbn:
+  OK count: 1079
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 189.78 seconds
+
+bass:
+  OK count: 1142
+  Unique OK count (OK only in this table): 3
+  Penalised Average Runtime × 2: 52.57 seconds
+
+aeon:
+  OK count: 1139
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 59.74 seconds
+
+k_adf:
+  OK count: 1116
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 102.42 seconds
+
+adf_obdd:
+  OK count: 950
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 456.08 seconds
+
+tsconj:
+  OK count: 1104
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 134.15 seconds
+
+biolqm:
+  OK count: 1038
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 272.69 seconds
+================================================================================

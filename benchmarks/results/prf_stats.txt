@@ -1,0 +1,56 @@
+Loading exclude list from ./exclude.txt...
+  Found 72 instances to exclude
+
+Loading result tables from ./prf...
+  Found 7 result tables: yadf, mpbn, bass, aeon, k_adf, tsconj, biolqm
+
+Processing tables...
+  Row counts after processing: {'yadf': 1165, 'mpbn': 1165, 'bass': 1165, 'aeon': 1165, 'k_adf': 1165, 'tsconj': 1165, 'biolqm': 1165}
+
+Joining tables...
+  Joined table has 1165 rows and 22 columns
+
+Saving summary to ./prf_summary.csv...
+  Summary saved successfully
+
+Computing statistics...
+
+================================================================================
+STATISTICS
+================================================================================
+
+yadf:
+  OK count: 342
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 1732.07 seconds
+
+mpbn:
+  OK count: 1065
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 219.08 seconds
+
+bass:
+  OK count: 969
+  Unique OK count (OK only in this table): 15
+  Penalised Average Runtime × 2: 414.84 seconds
+
+aeon:
+  OK count: 900
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 562.93 seconds
+
+k_adf:
+  OK count: 1081
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 191.46 seconds
+
+tsconj:
+  OK count: 1103
+  Unique OK count (OK only in this table): 2
+  Penalised Average Runtime × 2: 134.59 seconds
+
+biolqm:
+  OK count: 652
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 1067.66 seconds
+================================================================================

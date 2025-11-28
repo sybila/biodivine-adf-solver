@@ -1,0 +1,36 @@
+Loading exclude list from ./exclude.txt...
+  Found 72 instances to exclude
+
+Loading result tables from ./stm...
+  Found 3 result tables: yadf, k_adf, adf_obdd
+
+Processing tables...
+  Row counts after processing: {'yadf': 1165, 'k_adf': 1165, 'adf_obdd': 1165}
+
+Joining tables...
+  Joined table has 1165 rows and 10 columns
+
+Saving summary to ./stm_summary.csv...
+  Summary saved successfully
+
+Computing statistics...
+
+================================================================================
+STATISTICS
+================================================================================
+
+yadf:
+  OK count: 65
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 2269.90 seconds
+
+k_adf:
+  OK count: 1115
+  Unique OK count (OK only in this table): 544
+  Penalised Average Runtime × 2: 105.73 seconds
+
+adf_obdd:
+  OK count: 571
+  Unique OK count (OK only in this table): 0
+  Penalised Average Runtime × 2: 1249.27 seconds
+================================================================================

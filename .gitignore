@@ -32,4 +32,5 @@ test_instances/_normalized
 /run_*
 
 # Ignore final benchmark results
-results
+/results
+/benchmarks/results/venv
