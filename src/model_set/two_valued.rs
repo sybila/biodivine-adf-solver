@@ -1,6 +1,10 @@
+use crate::AdfBdds;
 use crate::adf_bdds::DirectEncoding;
 use crate::model_set::ModelSet;
+use log::trace;
+use ruddy::VariableId;
 use ruddy::split::Bdd;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -55,6 +59,103 @@ impl ModelSetTwoValued {
     /// Count the models in this set (possibly overflowing to [`f64::INFINITY`]).
     pub fn model_count(&self) -> f64 {
         self.encoding.count_direct_valuations(&self.symbolic_set)
+    }
+
+    /// Extract the model with the highest number of zeros (the least number of ones).
+    ///
+    /// # Panics
+    ///
+    /// The set must not be empty.
+    pub fn most_zero_model(&self) -> BTreeMap<VariableId, bool> {
+        self.encoding.most_zero_model(&self.symbolic_set)
+    }
+
+    /// Returns `true` if this set of models is empty.
+    pub fn is_empty(&self) -> bool {
+        self.symbolic_set.is_false()
+    }
+
+    /// Compute the intersection of two sets.
+    pub fn intersect(&self, other: &ModelSetTwoValued) -> ModelSetTwoValued {
+        assert!(Arc::ptr_eq(&self.encoding, &other.encoding));
+
+        ModelSetTwoValued {
+            symbolic_set: self.symbolic_set.and(&other.symbolic_set),
+            encoding: self.encoding.clone(),
+        }
+    }
+
+    /// Compute the union of two sets.
+    pub fn union(&self, other: &ModelSetTwoValued) -> ModelSetTwoValued {
+        assert!(Arc::ptr_eq(&self.encoding, &other.encoding));
+
+        ModelSetTwoValued {
+            symbolic_set: self.symbolic_set.or(&other.symbolic_set),
+            encoding: self.encoding.clone(),
+        }
+    }
+
+    /// Compute the difference of two sets.
+    pub fn minus(&self, other: &ModelSetTwoValued) -> ModelSetTwoValued {
+        assert!(Arc::ptr_eq(&self.encoding, &other.encoding));
+
+        ModelSetTwoValued {
+            symbolic_set: self.symbolic_set.and(&other.symbolic_set.not()),
+            encoding: self.encoding.clone(),
+        }
+    }
+
+    /// Compute the set of ADF interpretations that have *exactly* `k` statements set to one.
+    ///
+    /// Under normal circumstances, this should be a relatively fast operation, where the
+    /// resulting BDD is linear in the number of statements. Hence, it is currently
+    /// not cancellable.
+    pub fn mk_exactly_k_one_statements(one_count: usize, encoding: &AdfBdds) -> ModelSetTwoValued {
+        let direct = encoding.direct_encoding();
+        let direct_vars = direct.var_map().variable_ids().copied().collect::<Vec<_>>();
+        let at_most_k_one = Bdd::new_sat_exactly_k(one_count, &direct_vars);
+        encoding.mk_two_valued_set(at_most_k_one)
+    }
+
+    /// Extend this set with every interpretation that has additional statements fixed to one.
+    pub fn extend_with_more_ones(&self) -> ModelSetTwoValued {
+        let mut result = self.symbolic_set.clone();
+        for (i, var) in self
+            .encoding
+            .var_map()
+            .variable_ids()
+            .copied()
+            .rev()
+            .enumerate()
+        {
+            let lit = Bdd::new_literal(var, true);
+            let nlit = Bdd::new_literal(var, false);
+
+            // Select every model in which we have `var=false`, but there is
+            // no equivalent model with `var=true`. Flips `var` on output,
+            // meaning we actually get the set of models where `true` is added.
+
+            let adds_true = result
+                // Select every space where p_var=false and eliminate p_var
+                .binary_op_with_exists(&nlit, ruddy::boolean_operators::And, &[var])
+                // Reintroduce it with p_var=true
+                .and(&lit);
+
+            if !adds_true.is_false() {
+                result = result.or(&adds_true);
+                trace!(
+                    "Computing models with more ones [{}/{}]: BDD size {}.",
+                    i + 1,
+                    self.encoding.var_map().size(),
+                    result.node_count(),
+                );
+            }
+        }
+
+        ModelSetTwoValued {
+            symbolic_set: result,
+            encoding: self.encoding.clone(),
+        }
     }
 }
 
