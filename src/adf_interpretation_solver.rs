@@ -723,4 +723,262 @@ mod tests {
         // Preferred: should be 2 interpretations with 0 free statements: {T, T} and {F, F}
         assert_eq!(model_set.model_count(), 2.0);
     }
+
+    // Tests for solve_stable_two_valued
+
+    #[test]
+    fn test_solve_stable_simple_constant_true() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            ac(0, c(v)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 has constant true condition
+        // Complete two-valued: {0: true} (1 model)
+        // Stable: must be grounded, and since condition is always true, {0: true} is stable
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_constant_false() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            ac(0, c(f)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 has constant false condition
+        // Complete two-valued: {0: false} (1 model)
+        // Stable: {0: false} is stable (all zeros are stable)
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_mutual_dependency() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            ac(0, 1).
+            ac(1, 0).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Both statements depend on each other: 0 <=> 1
+        // Complete two-valued: {0: true, 1: true} and {0: false, 1: false} (2 models)
+        // Stable: Only the all-false model is stable (all zeros are always stable)
+        // The all-true model may not be stable if it can't be properly grounded
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_with_free_statement() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            ac(0, c(v)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 has constant true condition, statement 1 is free.
+        // Free statements are fixed to false for stable models
+        // Complete two-valued (after fixing free to false): {0: true, 1: false} (1 model)
+        // Stable: {0: true, 1: false} should be stable
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_self_reference() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            ac(0, 0).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 has self-reference (identity condition)
+        // Complete two-valued: {0: true} and {0: false} (2 models)
+        // Stable: Only the false model is stable (all zeros are always stable)
+        // The true model may not be stable if it can't be properly grounded
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_three_statements_chain() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            s(2).
+            ac(0, c(v)).
+            ac(1, 0).
+            ac(2, 1).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Chain: 0=true (constant), 1=0, 2=1
+        // Complete two-valued: {0: true, 1: true, 2: true} (1 model)
+        // Stable: Should be stable if all can be grounded
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_negation() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            ac(0, neg(1)).
+            ac(1, c(v)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 = not(1), statement 1 = true (constant)
+        // Complete two-valued: {0: false, 1: true} (1 model)
+        // Stable: Should be stable
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_complex_and_or() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            s(2).
+            ac(0, and(1, 2)).
+            ac(1, c(v)).
+            ac(2, c(v)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 = 1 AND 2, statements 1 and 2 = true (constant)
+        // Complete two-valued: {0: true, 1: true, 2: true} (1 model)
+        // Stable: Should be stable
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_empty_result() {
+        let solver = create_test_solver();
+        // Create an ADF that has no stable models
+        // This is tricky - we need a case where models exist but none are stable
+        // One example: a statement that requires itself to be false but can't be grounded
+        let adf_str = r#"
+            s(0).
+            ac(0, neg(0)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 = not(0) creates a contradiction
+        // Complete two-valued: no models (contradiction)
+        // Stable: empty
+        assert_eq!(model_set.model_count(), 0.0);
+        assert!(model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_minimal_ones() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            s(2).
+            ac(0, or(1, 2)).
+            ac(1, c(f)).
+            ac(2, c(f)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Statement 0 = 1 OR 2, statements 1 and 2 = false (constant)
+        // Complete two-valued: {0: false, 1: false, 2: false} (1 model)
+        // Stable: Should be stable (all zeros)
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
+
+    #[test]
+    fn test_solve_stable_multiple_minimal_models() {
+        let solver = create_test_solver();
+        let adf_str = r#"
+            s(0).
+            s(1).
+            ac(0, c(v)).
+            ac(1, c(v)).
+        "#;
+        let expr_adf = crate::AdfExpressions::parse(adf_str).expect("Failed to parse ADF");
+        let adf = AdfBdds::from(&expr_adf);
+
+        let model_set = solver
+            .solve_stable_two_valued(&adf)
+            .expect("Solving should not be cancelled");
+
+        // Both statements have constant true conditions
+        // Complete two-valued: {0: true, 1: true} (1 model)
+        // Stable: Should be stable
+        assert_eq!(model_set.model_count(), 1.0);
+        assert!(!model_set.is_empty());
+    }
 }

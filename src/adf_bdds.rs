@@ -1,9 +1,9 @@
 use crate::{
     AdfExpressions, ConditionExpression, ModelSetThreeValued, ModelSetTwoValued, Statement,
 };
-use cancel_this::{is_cancelled, Cancellable};
-use ruddy::split::Bdd;
+use cancel_this::{Cancellable, is_cancelled};
 use ruddy::VariableId;
+use ruddy::split::Bdd;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Index;
 use std::sync::Arc;
